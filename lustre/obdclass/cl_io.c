@@ -1198,8 +1198,13 @@ EXPORT_SYMBOL(cl_sync_io_wait);
 #ifndef HAVE_AIO_COMPLETE
 static inline void aio_complete(struct kiocb *iocb, ssize_t res, ssize_t res2)
 {
+# ifdef HAVE_KIOCB_COMPLETE_2ARGS
+	if (iocb->ki_complete)
+		iocb->ki_complete(iocb, res);
+# else
 	if (iocb->ki_complete)
 		iocb->ki_complete(iocb, res, res2);
+# endif /* HAVE_KIOCB_COMPLETE_2ARGS */
 }
 #endif
 
