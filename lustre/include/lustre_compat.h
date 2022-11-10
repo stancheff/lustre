@@ -592,4 +592,13 @@ static inline void ll_security_release_secctx(char *secdata, u32 seclen)
 #define ll_set_acl(ns, inode, acl, type)	ll_set_acl(inode, acl, type)
 #endif
 
+/**
+ * delete_from_page_cache is not exported anymore
+ */
+#ifdef HAVE_DELETE_FROM_PAGE_CACHE
+#define cfs_delete_from_page_cache(page)	delete_from_page_cache((page))
+#else
+#define cfs_delete_from_page_cache(page)
+#endif
+
 #endif /* _LUSTRE_COMPAT_H */
