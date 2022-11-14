@@ -1500,19 +1500,23 @@ struct obd_quotactl {
 };
 
 #define Q_COPY(out, in, member) (out)->member = (in)->member
-
-#define QCTL_COPY(out, in)				\
-do {							\
-	Q_COPY(out, in, qc_cmd);			\
-	Q_COPY(out, in, qc_type);			\
-	Q_COPY(out, in, qc_id);				\
-	Q_COPY(out, in, qc_stat);			\
-	Q_COPY(out, in, qc_dqinfo);			\
-	Q_COPY(out, in, qc_dqblk);			\
-	if (LUSTRE_Q_CMD_IS_POOL(in->qc_cmd))		\
-		memcpy(out->qc_poolname,		\
-		       in->qc_poolname,			\
-		       LOV_MAXPOOLNAME + 1);		\
+#ifdef __KERNEL__
+#define Q_MEMCPY(out, in, member, size)	\
+	strlcpy((out)->member, (in)->member, size)
+#else
+#define Q_MEMCPY(out, in, member, size)	\
+	memcpy((out)->member, (in)->member, size)
+#endif
+#define QCTL_COPY(out, in)						\
+do {									\
+	Q_COPY(out, in, qc_cmd);					\
+	Q_COPY(out, in, qc_type);					\
+	Q_COPY(out, in, qc_id);						\
+	Q_COPY(out, in, qc_stat);					\
+	Q_COPY(out, in, qc_dqinfo);					\
+	Q_COPY(out, in, qc_dqblk);					\
+	if (LUSTRE_Q_CMD_IS_POOL(in->qc_cmd))				\
+		Q_MEMCPY(out, in, qc_poolname, LOV_MAXPOOLNAME + 1);	\
 } while (0)
 
 /* Body of quota request used for quota acquire/release RPCs between quota
