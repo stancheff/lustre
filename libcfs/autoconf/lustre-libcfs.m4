@@ -2007,6 +2007,26 @@ bio_alloc_with_bdev, [
 ]) # LIBCFS_BIO_ALLOC_WITH_BDEV
 
 #
+# LIBCFS_KOBJ_TYPE_DEFAULT_ATTRS
+#
+# Linux commit v5.18-rc1-2-gcdb4f26a63c3
+#    kobject: kobj_type: remove default_attrs
+#
+AC_DEFUN([LIBCFS_KOBJ_TYPE_DEFAULT_ATTRS],[
+LB_CHECK_COMPILE([does struct kobj_type have 'default_attrs' member],
+kobj_type_default_attrs, [
+		#include <linux/kobject.h>
+	],[
+		struct kobj_type *kobj_type = NULL;
+		void *has = kobj_type->default_attrs;
+		(void) has;
+	],[
+		AC_DEFINE(HAVE_KOBJ_TYPE_DEFAULT_ATTRS, 1,
+			[struct kobj_type has 'default_attrs' member])
+	])
+]) # LIBCFS_KOBJ_TYPE_DEFAULT_ATTRS
+
+#
 # LIBCFS_PROG_LINUX
 #
 # LibCFS linux kernel checks
@@ -2156,6 +2176,8 @@ LIBCFS_LINUX_BLK_INTEGRITY_HEADER
 # 5.17
 LIBCFS_PDE_DATA_EXISTS
 LIBCFS_BIO_ALLOC_WITH_BDEV
+# 5.18
+LIBCFS_KOBJ_TYPE_DEFAULT_ATTRS
 ]) # LIBCFS_PROG_LINUX
 
 #

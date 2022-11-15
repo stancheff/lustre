@@ -256,17 +256,42 @@ static struct attribute *mgs_attrs[] = {
 	NULL,
 };
 
+KOBJ_ATTRIBUTE_GROUPS(mgs); /* creates mgs_groups from mgs_attrs */
+
+static inline struct attribute *get_attr_by_name(const struct kobj_type *typ,
+						 const char *name)
+{
+	int i;
+
+	for (i = 0; get_ktype_default(typ)[i]; i++) {
+#ifndef HAVE_KOBJ_TYPE_DEFAULT_ATTRS
+		int k;
+		struct attribute **attrs;
+
+		attrs = (struct attribute **)get_ktype_default(typ)[i]->attrs;
+		for (k = 0; attrs[k]; k++) {
+			if (!strcmp(attrs[k]->name, name))
+				return (struct attribute *)attrs[k];
+		}
+#else
+		if (!strcmp(get_ktype_default(typ)[i]->name, name))
+			return get_ktype_default(typ)[i];
+#endif
+	}
+	return NULL;
+}
+
 int lproc_mgs_setup(struct mgs_device *mgs, const char *osd_name)
 {
 	int osd_len = strlen(osd_name) - strlen("-osd");
 	struct obd_device *obd = mgs->mgs_obd;
-	struct kobj_type *bottom_type;
+	const struct kobj_type *bottom_type;
+	struct attribute *attr;
 	struct obd_device *osd_obd;
 	int rc;
-	int i;
 
 	obd->obd_vars = lprocfs_mgs_obd_vars;
-	obd->obd_ktype.default_attrs = mgs_attrs;
+	obd->obd_ktype.default_compat = KOBJ_TYPE_DEFAULT(mgs);
 	rc = lprocfs_obd_setup(obd, true);
 	if (rc != 0)
 		GOTO(out, rc);
@@ -304,21 +329,12 @@ int lproc_mgs_setup(struct mgs_device *mgs, const char *osd_name)
 	}
 
 	bottom_type = get_ktype(&mgs->mgs_bottom->dd_kobj);
-
-	for (i = 0; bottom_type->default_attrs[i]; i++) {
-		if (strcmp(bottom_type->default_attrs[i]->name, "fstype") == 0) {
-			mgs->mgs_fstype = bottom_type->default_attrs[i];
-			break;
-		}
-	}
-
-	for (i = 0; bottom_type->default_attrs[i]; i++) {
-		if (strcmp(bottom_type->default_attrs[i]->name, "mntdev") == 0) {
-			mgs->mgs_mntdev = bottom_type->default_attrs[i];
-			break;
-		}
-	}
-
+	attr = get_attr_by_name(bottom_type, "fstype");
+	if (attr)
+		mgs->mgs_fstype = attr;
+	attr = get_attr_by_name(bottom_type, "mntdev");
+	if (attr)
+		mgs->mgs_fstype = mgs->mgs_mntdev;
 	osd_obd = mgs->mgs_bottom->dd_lu_dev.ld_obd;
 	mgs->mgs_proc_osd = lprocfs_add_symlink("osd",
 						obd->obd_proc_entry,
