@@ -5564,6 +5564,24 @@ long ll_fallocate(struct file *filp, int mode, loff_t offset, loff_t len)
 	RETURN(rc);
 }
 
+static __always_inline unsigned long __must_check
+copy_from_uptr(void *to, const void __user *from, unsigned long n, bool kernel)
+{
+	if (!kernel)
+		return copy_from_user(to, from, n);
+	memcpy(to, (__force const void *)from, n);
+	return 0;
+}
+
+static __always_inline unsigned long __must_check
+copy_to_uptr(void __user *to, const void *from, unsigned long n, bool kernel)
+{
+	if (!kernel)
+		return copy_to_user(to, from, n);
+	memcpy((__force void *)to, from, n);
+	return 0;
+}
+#define FIEMAP_USE_MEMCPY     BIT(31)
 static int ll_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		     __u64 start, __u64 len)
 {
@@ -5571,6 +5589,7 @@ static int ll_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	size_t		num_bytes;
 	struct fiemap	*fiemap;
 	unsigned int	extent_count = fieinfo->fi_extents_max;
+	bool in_kernel = (fieinfo->fi_flags >> 31) & 1;
 
 	num_bytes = sizeof(*fiemap) + (extent_count *
 				       sizeof(struct fiemap_extent));
@@ -5579,13 +5598,13 @@ static int ll_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (fiemap == NULL)
 		RETURN(-ENOMEM);
 
-	fiemap->fm_flags = fieinfo->fi_flags;
+	fiemap->fm_flags = fieinfo->fi_flags & ~FIEMAP_USE_MEMCPY;
 	fiemap->fm_extent_count = fieinfo->fi_extents_max;
 	fiemap->fm_start = start;
 	fiemap->fm_length = len;
 	if (extent_count > 0 &&
-	    copy_from_user(&fiemap->fm_extents[0], fieinfo->fi_extents_start,
-			   sizeof(struct fiemap_extent)) != 0)
+	    copy_from_uptr(&fiemap->fm_extents[0], fieinfo->fi_extents_start,
+			   sizeof(struct fiemap_extent), in_kernel) != 0)
 		GOTO(out, rc = -EFAULT);
 
 	rc = ll_do_fiemap(inode, fiemap, num_bytes);
@@ -5600,11 +5619,13 @@ static int ll_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	}
 
 	fieinfo->fi_flags = fiemap->fm_flags;
+	if (in_kernel)
+		fieinfo->fi_flags |= FIEMAP_USE_MEMCPY;
 	fieinfo->fi_extents_mapped = fiemap->fm_mapped_extents;
 	if (extent_count > 0 &&
-	    copy_to_user(fieinfo->fi_extents_start, &fiemap->fm_extents[0],
+	    copy_to_uptr(fieinfo->fi_extents_start, &fiemap->fm_extents[0],
 			 fiemap->fm_mapped_extents *
-			 sizeof(struct fiemap_extent)) != 0)
+			 sizeof(struct fiemap_extent), in_kernel) != 0)
 		GOTO(out, rc = -EFAULT);
 out:
 	OBD_FREE_LARGE(fiemap, num_bytes);
