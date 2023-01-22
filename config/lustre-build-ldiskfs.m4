@@ -144,30 +144,35 @@ AS_IF([test x$RHEL_KERNEL = xyes], [
 # Not RHEL/SLES/openEuler or Ubuntu .. probably mainline
 AS_IF([test -z "$LDISKFS_SERIES"],
 	[
-	AS_VERSION_COMPARE([$LINUXRELEASE],[5.4.0],[],
-	[LDISKFS_SERIES="5.4.0-ml.series"],[
-	AS_VERSION_COMPARE([$LINUXRELEASE],[5.4.21],
-	  [LDISKFS_SERIES="5.4.0-ml.series"],  # lt
-	  [LDISKFS_SERIES="5.4.21-ml.series"], # eq
-	  [AS_VERSION_COMPARE([$LINUXRELEASE],[5.8.0],
-	    [LDISKFS_SERIES="5.4.136-ml.series"], # lt
-	    [LDISKFS_SERIES="5.8.0-ml.series"],  # eq
-	    [AS_VERSION_COMPARE([$LINUXRELEASE],[5.9.0],
-	      [LDISKFS_SERIES="5.8.0-ml.series"],  # lt
-	      [LDISKFS_SERIES="5.9.0-ml.series"],  # eq
-	      [AS_VERSION_COMPARE([$LINUXRELEASE],[5.10.0],
-	        [LDISKFS_SERIES="5.9.0-ml.series"],  # lt
-	        [LDISKFS_SERIES="5.10.0-ml.series"],  # eq
-	        [AS_VERSION_COMPARE([$LINUXRELEASE],[5.18.0],
-	          [LDISKFS_SERIES="5.10.0-ml.series"],  # lt
-	          [LDISKFS_SERIES="5.18.13-ml.series"],  # eq
-	          [LDISKFS_SERIES="5.18.13-ml.series"],  # gt
-	       )]
-	      )]
-	    )]
-	  )]
-		)])
-	],
+	AS_VERSION_COMPARE([$LINUXRELEASE],[5.4.0],[
+		], [
+		LDISKFS_SERIES="5.4.0-ml.series"],[
+	AS_VERSION_COMPARE([$LINUXRELEASE],[5.4.21],[
+		LDISKFS_SERIES="5.4.0-ml.series"], [
+		LDISKFS_SERIES="5.4.21-ml.series"],[
+	AS_VERSION_COMPARE([$LINUXRELEASE],[5.8.0], [
+		LDISKFS_SERIES="5.4.136-ml.series"], [
+		LDISKFS_SERIES="5.8.0-ml.series"], [
+	AS_VERSION_COMPARE([$LINUXRELEASE],[5.9.0], [
+		LDISKFS_SERIES="5.8.0-ml.series"], [
+		LDISKFS_SERIES="5.9.0-ml.series"], [
+	AS_VERSION_COMPARE([$LINUXRELEASE],[5.10.0], [
+		LDISKFS_SERIES="5.9.0-ml.series"], [
+		LDISKFS_SERIES="5.10.0-ml.series"], [
+	AS_VERSION_COMPARE([$LINUXRELEASE],[5.18.0], [
+		LDISKFS_SERIES="5.10.0-ml.series"], [
+		LDISKFS_SERIES="5.18.13-ml.series"], [
+	AS_VERSION_COMPARE([$LINUXRELEASE],[6.0.0], [
+		LDISKFS_SERIES="5.18.13-ml.series"], [
+		LDISKFS_SERIES="6.0.19-ml.series"], [
+		LDISKFS_SERIES="6.0.19-ml.series"]
+	)] # 6.0
+	)] # 5.18
+	)] # 5.10
+	)] # 5.9
+	)] # 5.8
+	)]
+	)],
 [])
 AS_IF([test -z "$LDISKFS_SERIES"],
 	[AC_MSG_RESULT([failed to identify series])],
