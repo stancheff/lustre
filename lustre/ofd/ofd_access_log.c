@@ -433,7 +433,13 @@ static const struct file_operations oal_fops = {
 	.read = &oal_file_read,
 	.write = &oal_file_write,
 	.poll = &oal_file_poll,
+/*
+ * Linux commit v5.19-rc2-6-g868941b14441
+ *   fs: remove no_llseek
+ */
+#ifdef HAVE_NO_LLSEEK
 	.llseek = &no_llseek,
+#endif
 };
 
 static void oal_device_release(struct device *dev)
