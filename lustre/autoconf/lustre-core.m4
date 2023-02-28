@@ -3712,6 +3712,60 @@ AC_DEFUN([LC_HAVE_ACL_WITH_DENTRY], [
 	])
 ]) # LC_HAVE_ACL_WITH_DENTRY
 
+AC_DEFUN([LC_SRC_HAVE_WRITE_BATCH_BEGIN], [
+	LB2_LINUX_TEST_SRC([aops_write_batch_begin], [
+		#include <linux/fs.h>
+	],[
+		struct address_space_operations *ops = NULL;
+		struct file *file = NULL;
+		struct address_space *mapping = NULL;
+		struct pagevec *pvec = NULL;
+		void *fsdata = NULL;
+
+		ops->write_batch_begin(file, mapping, 0, 409600, pvec, &fsdata);
+	],[-Werror])
+])
+AC_DEFUN([LC_HAVE_WRITE_BATCH_BEGIN], [
+	AC_MSG_CHECKING([if address_space_operations has 'write_batch_begin'])
+	LB2_LINUX_TEST_RESULT([aops_write_batch_begin], [
+		AC_DEFINE(HAVE_WRITE_BATCH_BEGIN, 1,
+			[address_space_operations has 'write_batch_begin'])
+	])
+]) # LC_HAVE_WRITE_BATCH_BEGIN
+
+AC_DEFUN([LC_SRC_GENERIC_PERFORM_BATCH_WRITE], [
+	LB2_LINUX_TEST_SRC([generic_perform_batch_write], [
+		#include <linux/fs.h>
+	],[
+		struct kiocb *kiocb = NULL;
+		struct iov_iter *iter = NULL;
+		ssize_t written = generic_perform_batch_write(kiocb, iter);
+		(void)written;
+	],[-Werror])
+])
+AC_DEFUN([LC_GENERIC_PERFORM_BATCH_WRITE], [
+	AC_MSG_CHECKING([if generic_perform_batch_write() is available])
+	LB2_LINUX_TEST_RESULT([generic_perform_batch_write], [
+		AC_DEFINE(HAVE_GENERIC_PERFORM_BATCH_WRITE, 1,
+			[generic_perform_batch_write() is available])
+	])
+]) # LC_GENERIC_PERFORM_BATCH_WRITE
+
+AC_DEFUN([LC_SRC_FILEMAP_DIRTY_FOLIO_BATCHED], [
+	LB2_LINUX_TEST_SRC([filemap_dirty_folio_batched], [
+		#include <linux/writeback.h>
+	],[
+		filemap_dirty_folio_batched((struct folio_batch *)NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_GENERIC_PERFORM_BATCH_WRITE], [
+	AC_MSG_CHECKING([if filemap_dirty_folio_batched() is available])
+	LB2_LINUX_TEST_RESULT([filemap_dirty_folio_batched], [
+		AC_DEFINE(HAVE_FILEMAP_DIRTY_FOLIO_BATCHED, 1,
+			[filemap_dirty_folio_batched() is available])
+	])
+]) # LC_FILEMAP_DIRTY_FOLIO_BATCHED
+
 #
 # LC_PROG_LINUX
 #
@@ -3958,6 +4012,11 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	# 6.2
 	LC_SRC_HAVE_GET_RANDOM_U32_BELOW
 	LC_SRC_HAVE_ACL_WITH_DENTRY
+
+	# Future
+	LC_SRC_HAVE_WRITE_BATCH_BEGIN
+	LC_SRC_GENERIC_PERFORM_BATCH_WRITE
+	LC_SRC_FILEMAP_DIRTY_FOLIO_BATCHED
 
 	# kernel patch to extend integrity interface
 	LC_SRC_BIO_INTEGRITY_PREP_FN
@@ -4217,6 +4276,11 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	# 6.2
 	LC_HAVE_GET_RANDOM_U32_BELOW
 	LC_HAVE_ACL_WITH_DENTRY
+
+	# Future
+	LC_HAVE_WRITE_BATCH_BEGIN
+	LC_GENERIC_PERFORM_BATCH_WRITE
+	LC_FILEMAP_DIRTY_FOLIO_BATCHED
 
 	# kernel patch to extend integrity interface
 	LC_BIO_INTEGRITY_PREP_FN

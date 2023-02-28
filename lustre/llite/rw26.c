@@ -793,6 +793,7 @@ static int ll_write_begin(struct file *file, struct address_space *mapping,
 	unsigned from = pos & (PAGE_SIZE - 1);
 	unsigned to = from + len;
 	int result = 0;
+	unsigned int cl_pgno;
 	ENTRY;
 
 	CDEBUG(D_VFSTRACE, "Writing %lu of %d to %d bytes\n", index, from, len);
@@ -875,7 +876,11 @@ again:
 	if (IS_ERR(page))
 		GOTO(out, result = PTR_ERR(page));
 
-	lcc->lcc_page = page;
+	/* Save index for 0th page of vector */
+	if (*fsdata != lcc)
+		lcc->lcc_index = index;
+	cl_pgno = index - lcc->lcc_index;
+	lcc->lcc_pages[cl_pgno] = page;
 	lu_ref_add(&page->cp_reference, "cl_io", io);
 
 	cl_page_assume(env, io, page);
@@ -975,8 +980,10 @@ static int ll_write_end(struct file *file, struct address_space *mapping,
 	struct vvp_io *vio;
 	struct cl_page *page;
 	unsigned from = pos & (PAGE_SIZE - 1);
+	pgoff_t index = pos >> PAGE_SHIFT;
 	bool unplug = false;
 	int result = 0;
+	unsigned int cl_pgno;
 	ENTRY;
 
 	put_page(vmpage);
@@ -990,8 +997,9 @@ static int ll_write_end(struct file *file, struct address_space *mapping,
 	}
 
 	LASSERT(lcc != NULL);
+	cl_pgno = index - lcc->lcc_index;
 	env  = lcc->lcc_env;
-	page = lcc->lcc_page;
+	page = lcc->lcc_pages[cl_pgno];
 	io   = lcc->lcc_io;
 	vio  = vvp_env_io(env);
 
@@ -999,7 +1007,7 @@ static int ll_write_end(struct file *file, struct address_space *mapping,
 	if (copied > 0) {
 		struct cl_page_list *plist = &vio->u.readwrite.vui_queue;
 
-		lcc->lcc_page = NULL; /* page will be queued */
+		lcc->lcc_pages[cl_pgno] = NULL; /* page will be queued */
 
 		/* Add it into write queue */
 		cl_page_list_add(plist, page, true);
@@ -1023,7 +1031,7 @@ static int ll_write_end(struct file *file, struct address_space *mapping,
 	} else {
 		cl_page_disown(env, io, page);
 
-		lcc->lcc_page = NULL;
+		lcc->lcc_pages[cl_pgno] = NULL;
 		lu_ref_del(&page->cp_reference, "cl_io", io);
 		cl_page_put(env, page);
 
@@ -1062,6 +1070,217 @@ static int ll_migratepage(struct address_space *mapping,
 }
 #endif
 
+#ifdef HAVE_WRITE_BATCH_BEGIN
+static inline void _to_pagevec(struct folio_batch *batch, pgoff_t index,
+			       struct pagevec *pvec)
+{
+	int i, count = folio_batch_count(batch);
+
+	for (i = 0; i < count; i++) {
+		if (!batch->folios[i] || xa_is_value(batch->folios[i]))
+			pvec->pages[i] = &batch->folios[i]->page;
+		else
+			pvec->pages[i] = folio_file_page(batch->folios[i], index + i);
+	}
+}
+
+static inline
+int _grab_cache_pagevec_nowait(struct address_space *mapping, pgoff_t index,
+			       struct pagevec *pvec)
+{
+	int err;
+	struct folio_batch batch;
+
+	folio_batch_init(&batch);
+	batch.nr = pvec->nr;
+	err = grab_cache_folios_fast(mapping, index, &batch,
+			FGP_LOCK | FGP_CREAT | FGP_NOFS | FGP_NOWAIT,
+			mapping_gfp_mask(mapping));
+	if (!err)
+		_to_pagevec(&batch, index, pvec);
+	return err;
+}
+
+static inline
+int _grab_cache_pages_write_begin(struct address_space *mapping, pgoff_t index,
+				  struct pagevec *pvec)
+{
+	int err;
+	struct folio_batch batch;
+
+	folio_batch_init(&batch);
+	batch.nr = pvec->nr;
+	err = grab_cache_folios_fast(mapping, index, &batch,
+			FGP_LOCK | FGP_WRITE | FGP_CREAT | FGP_STABLE,
+			mapping_gfp_mask(mapping));
+	if (!err)
+		_to_pagevec(&batch, index, pvec);
+
+	return err;
+}
+
+int ll_write_batch_begin(struct file *file, struct address_space *mapping,
+			 loff_t pos, unsigned int len, struct pagevec *pvec,
+			 void *fsdata[])
+{
+	struct ll_cl_context *lcc = NULL;
+	const struct lu_env  *env = NULL;
+	struct cl_io   *io = NULL;
+	struct inode *inode = file_inode(file);
+	struct cl_object *clob = ll_i2info(mapping->host)->lli_clob;
+	pgoff_t index = pos >> PAGE_SHIFT;
+	struct cl_page *pages[PAGEVEC_SIZE];
+	int result = 0;
+	int err;
+	int i, count;
+	bool commit;
+	bool regrab;
+	bool truncated;
+
+	ENTRY;
+
+	CDEBUG(D_VFSTRACE, "Writing %lu from %ld writing %d bytes\n", index, (unsigned long)pos, len);
+
+	memset(pages, 0, sizeof(pages));
+	/* can only deal with multiples of pages */
+	if (pos & (PAGE_SIZE - 1))
+		return -ERANGE; /* slowpath */
+	if (len & (PAGE_SIZE -1))
+		return -ERANGE; /* slowpath */
+	if (file->f_flags & O_DIRECT)
+		return -ERANGE; /* slowpath */
+
+	lcc = ll_cl_find(inode);
+	if (lcc == NULL)
+		return -ERANGE; /* slowpath */
+
+	env = lcc->lcc_env;
+	io  = lcc->lcc_io;
+	fsdata[0] = lcc;
+
+again:
+	err = _grab_cache_pagevec_nowait(mapping, index, pvec);
+	if (err)
+		GOTO(out, result = -ERANGE);
+
+	count = pagevec_count(pvec);
+	commit = false;
+	regrab = false;
+	for (i = 0; i < count; i++) {
+		struct page *vmpage = pvec->pages[i];
+
+		if (unlikely(vmpage == NULL || PageDirty(vmpage) || PageWriteback(vmpage))) {
+			struct vvp_io *vio = vvp_env_io(env);
+			struct cl_page_list *plist = &vio->u.readwrite.vui_queue;
+
+			/* if the page is already in dirty cache, we have to commit
+			 * the pages right now; otherwise, it may cause deadlock
+			 * because it holds page lock of a dirty page and request for
+			 * more grants. It's okay for the dirty page to be the first
+			 * one in commit page list, though. */
+			if (vmpage && plist->pl_nr > 0) {
+				unlock_page(vmpage);
+				put_page(vmpage);
+				vmpage = pvec->pages[i] = NULL;
+			}
+
+			commit = true;
+			if (!vmpage)
+				regrab = true;
+		}
+	}
+	if (commit) {
+		/* commit pages and then wait for page lock */
+		result = vvp_io_write_commit(env, io);
+		if (result < 0)
+			GOTO(out, result = -ERANGE);
+	}
+	if (regrab) {
+		for (i = 0; i < count; i++) {
+			if (!pvec->pages[i])
+				continue;
+			unlock_page(pvec->pages[i]);
+			put_page(pvec->pages[i]);
+			pvec->pages[i] = NULL;
+		}
+		err = _grab_cache_pages_write_begin(mapping, index, pvec);
+		if (err)
+			GOTO(out, result = -ERANGE);
+		for (i = 0; i < count; i++) {
+			if (!pvec->pages[i])
+				err = -ENOMEM;
+		}
+		if (err) {
+			for (i = 0; i < count; i++) {
+				if (!pvec->pages[i])
+					continue;
+				unlock_page(pvec->pages[i]);
+				put_page(pvec->pages[i]);
+				pvec->pages[i] = NULL;
+			}
+			GOTO(out, result = -ERANGE);
+		}
+	}
+	truncated = false;
+	for (i = 0; i < count; i++) {
+		if (mapping != pvec->pages[i]->mapping)
+			truncated = true;
+	}
+	if (truncated) {
+		for (i = 0; i < count; i++) {
+			unlock_page(pvec->pages[i]);
+			put_page(pvec->pages[i]);
+			pvec->pages[i] = NULL;
+		}
+		goto again;
+	}
+
+	lcc->lcc_index = index;
+	/* Map to CL pages */
+	for (i = 0; i < count; i++) {
+		struct page *vmpage = pvec->pages[i];
+
+		pages[i] = cl_page_find(env, clob, vmpage->index, vmpage, CPT_CACHEABLE);
+		if (IS_ERR(pages[i]))
+			GOTO(out, result = PTR_ERR(pages[i]));
+
+		lcc->lcc_pages[i] = pages[i];
+		lu_ref_add(&pages[i]->cp_reference, "cl_io", io);
+		cl_page_assume(env, io, pages[i]);
+		if (!PageUptodate(vmpage)) {
+			/*
+			 * We're completely overwriting an existing page,
+			 * so _don't_ set it up to date until commit_write
+			 */
+			CL_PAGE_HEADER(D_PAGE, env, pages[i], "full page write\n");
+			POISON_PAGE(vmpage, 0x11);
+		}
+	}
+
+	EXIT;
+out:
+	if (result < 0) {
+		for (i = 0; i < count; i++) {
+			/* unwind page-cache pages */
+			if (pvec->pages[i]) {
+				unlock_page(pvec->pages[i]);
+				put_page(pvec->pages[i]);
+			}
+			/* unwind lustre cl_pages */
+			if (!IS_ERR_OR_NULL(pages[i])) {
+				lu_ref_del(&pages[i]->cp_reference, "cl_io", io);
+				cl_page_put(env, pages[i]);
+			}
+		}
+		if (io)
+			io->ci_result = result;
+	} else {
+		fsdata[0] = lcc;
+	}
+	RETURN(result);
+}
+#endif
+
 const struct address_space_operations ll_aops = {
 #ifdef HAVE_DIRTY_FOLIO
 	.dirty_folio		= filemap_dirty_folio,
@@ -1088,6 +1307,9 @@ const struct address_space_operations ll_aops = {
 	.writepages		= ll_writepages,
 	.write_begin		= ll_write_begin,
 	.write_end		= ll_write_end,
+#ifdef HAVE_WRITE_BATCH_BEGIN
+	.write_batch_begin	= ll_write_batch_begin,
+#endif
 #ifdef HAVE_AOPS_MIGRATE_FOLIO
 	.migrate_folio		= ll_migrate_folio,
 #elif defined(CONFIG_MIGRATION)

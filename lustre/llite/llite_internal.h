@@ -1403,7 +1403,8 @@ struct ll_cl_context {
 	void			*lcc_cookie;
 	const struct lu_env	*lcc_env;
 	struct cl_io		*lcc_io;
-	struct cl_page		*lcc_page;
+	pgoff_t			 lcc_index;
+	struct cl_page		*lcc_pages[PAGEVEC_SIZE];
 	enum lcc_type		 lcc_type;
 	struct kiocb		*lcc_iocb;
 	struct iov_iter		*lcc_iter;

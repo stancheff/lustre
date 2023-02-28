@@ -968,6 +968,22 @@ static int vvp_io_commit_sync(const struct lu_env *env, struct cl_io *io,
 	RETURN(bytes > 0 ? bytes : rc);
 }
 
+#ifdef HAVE_FILEMAP_DIRTY_FOLIO_BATCHED
+
+void vvp_set_pagevec_dirty(struct pagevec *pvec)
+{
+	struct folio_batch batch;
+	int i, count = pagevec_count(pvec);
+
+	folio_batch_init(&batch);
+	for (i = 0; i < count; i++) {
+		folio_batch_add(&batch, page_folio(pvec->pages[i]));
+	}
+	filemap_dirty_folio_batched(&batch);
+}
+
+#else /* !HAVE_FILEMAP_DIRTY_FOLIO_BATCHED */
+
 /*
  * From kernel v4.19-rc5-248-g9b89a0355144 use XArrary
  * Prior kernels use radix_tree for tags
@@ -1098,6 +1114,7 @@ void vvp_set_pagevec_dirty(struct pagevec *pvec)
 #endif
 	EXIT;
 }
+#endif /* HAVE_FILEMAP_DIRTY_FOLIO_BATCHED */
 
 static void write_commit_callback(const struct lu_env *env, struct cl_io *io,
 				  struct pagevec *pvec)
@@ -1323,7 +1340,17 @@ static int vvp_io_write_start(const struct lu_env *env,
 
 		if (unlikely(lock_inode))
 			inode_lock(inode);
+#ifdef HAVE_GENERIC_PERFORM_BATCH_WRITE
+		if (file->f_flags & O_DIRECT || cnt <= (PAGE_SIZE << 3)) {
+			result = __generic_file_write_iter(vio->vui_iocb, &iter);
+		} else {
+			result = generic_perform_batch_write(vio->vui_iocb, &iter);
+			if (likely(result > 0))
+				vio->vui_iocb->ki_pos += result;
+		}
+#else
 		result = __generic_file_write_iter(vio->vui_iocb, &iter);
+#endif
 		if (unlikely(lock_inode))
 			inode_unlock(inode);
 
