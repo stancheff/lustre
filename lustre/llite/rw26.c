@@ -764,6 +764,88 @@ static int ll_prepare_partial_page(const struct lu_env *env, struct cl_io *io,
 out:
 	return result;
 }
+#ifdef HAVE_FILEMAP_GET_FOLIO_PREALLOC
+static void ll_prealloc_pages_fill_locked(struct ll_cl_context *lcc, gfp_t gfp)
+{
+	LIST_HEAD(pages);
+	struct folio *folio;
+	struct page *page;
+
+	if (list_first_entry_or_null(&lcc->lcc_free_folios, struct folio, lru))
+		return;
+
+	// Alloc bulk pages and convert pages to folios:
+	alloc_pages_bulk_list(gfp, lcc->lcc_free_folios_limit, &pages);
+	while ((page = list_first_entry_or_null(&pages, struct page,
+						lru)) != NULL) {
+		folio = page_folio(page);
+		list_move(&folio->lru, &lcc->lcc_free_folios);
+	}
+}
+
+static struct page *ll_grab_cache_page_flags(struct address_space *mapping,
+					     pgoff_t index, int fgp_flags,
+					     struct ll_cl_context *lcc)
+{
+	struct folio *folio;
+	gfp_t gfp = mapping_gfp_mask(mapping);
+
+	mutex_lock(&lcc->lcc_free_folios_lock);
+	ll_prealloc_pages_fill_locked(lcc, gfp);
+
+	folio = __filemap_get_folio(mapping, index, &lcc->lcc_free_folios,
+				    fgp_flags, gfp);
+	mutex_unlock(&lcc->lcc_free_folios_lock);
+
+	if (!folio || xa_is_value(folio))
+		return NULL;
+
+	return folio_file_page(folio, index);
+}
+
+static struct page * ll_grab_cache_page_nowait(struct address_space *mapping,
+					       pgoff_t index,
+					       struct ll_cl_context *lcc)
+{
+	int fgp_flags = FGP_LOCK | FGP_CREAT | FGP_NOFS | FGP_NOWAIT;
+
+	return ll_grab_cache_page_flags(mapping, index, fgp_flags, lcc);
+}
+
+static
+struct page * ll_grab_cache_page_write_begin(struct address_space *mapping,
+					     pgoff_t index,
+					     struct ll_cl_context *lcc)
+{
+	int fgp_flags = FGP_LOCK | FGP_CREAT | FGP_WRITE | FGP_STABLE;
+
+	return ll_grab_cache_page_flags(mapping, index, fgp_flags, lcc);
+}
+
+#else /* !HAVE_WRITE_BATCH_BEGIN */
+
+static struct page * ll_grab_cache_page_nowait(struct address_space *mapping,
+					       pgoff_t index,
+					       struct ll_cl_context *lcc)
+{
+	return grab_cache_page_nowait(mapping, index);
+}
+
+static
+struct page * ll_grab_cache_page_write_begin(struct address_space *mapping,
+					     pgoff_t index,
+ #ifdef HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
+					     unsigned int flags,
+ #endif
+					     struct ll_cl_context *lcc)
+{
+	return grab_cache_page_write_begin(mapping, index
+ #ifdef HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
+							     , flags
+ #endif
+							     );
+}
+#endif /* HAVE_FILEMAP_GET_FOLIO_PREALLOC */
 
 static int ll_tiny_write_begin(struct page *vmpage, struct address_space *mapping)
 {
@@ -799,7 +881,7 @@ static int ll_write_begin(struct file *file, struct address_space *mapping,
 
 	lcc = ll_cl_find(inode);
 	if (lcc == NULL) {
-		vmpage = grab_cache_page_nowait(mapping, index);
+		vmpage = ll_grab_cache_page_nowait(mapping, index, lcc);
 		result = ll_tiny_write_begin(vmpage, mapping);
 		GOTO(out, result);
 	}
@@ -828,14 +910,13 @@ static int ll_write_begin(struct file *file, struct address_space *mapping,
 	}
 again:
 	/* To avoid deadlock, try to lock page first. */
-	vmpage = grab_cache_page_nowait(mapping, index);
-
+	vmpage = ll_grab_cache_page_nowait(mapping, index, lcc);
 	if (unlikely(vmpage == NULL ||
 		     PageDirty(vmpage) || PageWriteback(vmpage))) {
 		struct vvp_io *vio = vvp_env_io(env);
 		struct cl_page_list *plist = &vio->u.readwrite.vui_queue;
 
-                /* if the page is already in dirty cache, we have to commit
+		/* if the page is already in dirty cache, we have to commit
 		 * the pages right now; otherwise, it may cause deadlock
 		 * because it holds page lock of a dirty page and request for
 		 * more grants. It's okay for the dirty page to be the first
@@ -851,12 +932,12 @@ again:
 		if (result < 0)
 			GOTO(out, result);
 
-		if (vmpage == NULL) {
-			vmpage = grab_cache_page_write_begin(mapping, index
+		if (!vmpage) {
+			vmpage = ll_grab_cache_page_write_begin(mapping, index,
 #ifdef HAVE_GRAB_CACHE_PAGE_WRITE_BEGIN_WITH_FLAGS
-							     , flags
+								flags,
 #endif
-							     );
+								lcc);
 			if (vmpage == NULL)
 				GOTO(out, result = -ENOMEM);
 		}

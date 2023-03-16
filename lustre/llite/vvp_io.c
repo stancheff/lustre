@@ -968,6 +968,22 @@ static int vvp_io_commit_sync(const struct lu_env *env, struct cl_io *io,
 	RETURN(bytes > 0 ? bytes : rc);
 }
 
+#ifdef HAVE_FILEMAP_DIRTY_FOLIO_BATCHED
+
+void vvp_set_pagevec_dirty(struct pagevec *pvec)
+{
+	struct folio_batch batch;
+	int i, count = pagevec_count(pvec);
+
+	folio_batch_init(&batch);
+	for (i = 0; i < count; i++) {
+		folio_batch_add(&batch, page_folio(pvec->pages[i]));
+	}
+	filemap_dirty_folio_batched(&batch);
+}
+
+#else /* !HAVE_FILEMAP_DIRTY_FOLIO_BATCHED */
+
 /*
  * From kernel v4.19-rc5-248-g9b89a0355144 use XArrary
  * Prior kernels use radix_tree for tags
@@ -1098,6 +1114,7 @@ void vvp_set_pagevec_dirty(struct pagevec *pvec)
 #endif
 	EXIT;
 }
+#endif /* HAVE_FILEMAP_DIRTY_FOLIO_BATCHED */
 
 static void write_commit_callback(const struct lu_env *env, struct cl_io *io,
 				  struct pagevec *pvec)
@@ -1237,6 +1254,52 @@ int vvp_io_write_commit(const struct lu_env *env, struct cl_io *io)
 	RETURN(rc);
 }
 
+#ifdef HAVE_FILEMAP_GET_FOLIO_PREALLOC
+static void vvp_prealloc_pages(struct ll_cl_context *lcc, size_t len, gfp_t gfp)
+{
+	LIST_HEAD(pages);
+	struct folio *folio;
+	struct page *page;
+	unsigned long nr_pages = DIV_ROUND_UP(len, PAGE_SIZE);
+	unsigned long n = 0;
+
+	/* unused pre-alloc'd buffer pages */
+	if (nr_pages > 512)
+		nr_pages = 512;
+
+	mutex_lock(&lcc->lcc_free_folios_lock);
+	lcc->lcc_free_folios_limit = nr_pages;
+	list_for_each_entry(folio, &lcc->lcc_free_folios, lru)
+		n++;
+	if (n < nr_pages) {
+		nr_pages -= n;
+		alloc_pages_bulk_list(gfp, nr_pages, &pages);
+		while ((page = list_first_entry_or_null(&pages, struct page,
+							lru)) != NULL) {
+			folio = page_folio(page);
+			list_move(&folio->lru, &lcc->lcc_free_folios);
+		}
+	}
+	mutex_unlock(&lcc->lcc_free_folios_lock);
+}
+#endif
+
+static void vvp_prealloc_pages_release(struct ll_cl_context *lcc)
+{
+#ifdef HAVE_FILEMAP_GET_FOLIO_PREALLOC
+	struct folio *folio;
+
+	/* unused pre-alloc'd buffer pages */
+	mutex_lock(&lcc->lcc_free_folios_lock);
+	while ((folio = list_first_entry_or_null(&lcc->lcc_free_folios,
+						 struct folio, lru)) != NULL) {
+		list_del(&folio->lru);
+		folio_put(folio);
+	}
+	mutex_unlock(&lcc->lcc_free_folios_lock);
+#endif
+}
+
 static int vvp_io_write_start(const struct lu_env *env,
                               const struct cl_io_slice *ios)
 {
@@ -1323,6 +1386,13 @@ static int vvp_io_write_start(const struct lu_env *env,
 
 		if (unlikely(lock_inode))
 			inode_lock(inode);
+		if (!(file->f_flags & O_DIRECT)) {
+			struct ll_cl_context *lcc = ll_cl_find(inode);
+			gfp_t gfp = mapping_gfp_mask(inode->i_mapping);
+
+			if (lcc)
+				vvp_prealloc_pages(lcc, cnt, gfp);
+		}
 		result = __generic_file_write_iter(vio->vui_iocb, &iter);
 		if (unlikely(lock_inode))
 			inode_unlock(inode);
@@ -1396,6 +1466,10 @@ static void vvp_io_rw_end(const struct lu_env *env,
 {
 	struct inode		*inode = vvp_object_inode(ios->cis_obj);
 	struct ll_inode_info	*lli = ll_i2info(inode);
+	struct ll_cl_context	*lcc = ll_cl_find(inode);
+
+	if (lcc)
+		vvp_prealloc_pages_release(lcc);
 
 	trunc_sem_up_read(&lli->lli_trunc_sem);
 }

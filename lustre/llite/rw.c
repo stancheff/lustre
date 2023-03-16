@@ -1609,6 +1609,8 @@ void ll_cl_add(struct inode *inode, const struct lu_env *env, struct cl_io *io,
 
 	memset(lcc, 0, sizeof(*lcc));
 	INIT_LIST_HEAD(&lcc->lcc_list);
+	INIT_LIST_HEAD(&lcc->lcc_free_folios);
+	mutex_init(&lcc->lcc_free_folios_lock);
 	lcc->lcc_cookie = current;
 	lcc->lcc_env = env;
 	lcc->lcc_io = io;

@@ -3712,6 +3712,40 @@ AC_DEFUN([LC_HAVE_ACL_WITH_DENTRY], [
 	])
 ]) # LC_HAVE_ACL_WITH_DENTRY
 
+AC_DEFUN([LC_SRC_FILEMAP_GET_FOLIO_PREALLOC], [
+	LB2_LINUX_TEST_SRC([__filemap_get_folio_prealloc_folios], [
+		#include <linux/pagemap.h>
+	],[
+		struct list_head *folios = NULL;
+		struct address_space *mapping = NULL;
+		struct folio *folio __attribute__ ((unused));
+
+		folio = __filemap_get_folio(mapping, 0, folios, 0, 0);
+	],[-Werror])
+])
+AC_DEFUN([LC_FILEMAP_GET_FOLIO_PREALLOC], [
+	AC_MSG_CHECKING([if __filemap_get_folio takes a list of folios])
+	LB2_LINUX_TEST_RESULT([__filemap_get_folio_prealloc_folios], [
+		AC_DEFINE(HAVE_FILEMAP_GET_FOLIO_PREALLOC, 1,
+			[__filemap_get_folio takes a list of folios])
+	])
+]) # LC_FILEMAP_GET_FOLIO_PREALLOC
+
+AC_DEFUN([LC_SRC_FILEMAP_DIRTY_FOLIO_BATCHED], [
+	LB2_LINUX_TEST_SRC([filemap_dirty_folio_batched], [
+		#include <linux/writeback.h>
+	],[
+		filemap_dirty_folio_batched((struct folio_batch *)NULL);
+	],[-Werror])
+])
+AC_DEFUN([LC_GENERIC_PERFORM_BATCH_WRITE], [
+	AC_MSG_CHECKING([if filemap_dirty_folio_batched() is available])
+	LB2_LINUX_TEST_RESULT([filemap_dirty_folio_batched], [
+		AC_DEFINE(HAVE_FILEMAP_DIRTY_FOLIO_BATCHED, 1,
+			[filemap_dirty_folio_batched() is available])
+	])
+]) # LC_FILEMAP_DIRTY_FOLIO_BATCHED
+
 #
 # LC_PROG_LINUX
 #
@@ -3958,6 +3992,10 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	# 6.2
 	LC_SRC_HAVE_GET_RANDOM_U32_BELOW
 	LC_SRC_HAVE_ACL_WITH_DENTRY
+
+	# Future
+	LC_SRC_FILEMAP_GET_FOLIO_PREALLOC
+	LC_SRC_FILEMAP_DIRTY_FOLIO_BATCHED
 
 	# kernel patch to extend integrity interface
 	LC_SRC_BIO_INTEGRITY_PREP_FN
@@ -4217,6 +4255,10 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	# 6.2
 	LC_HAVE_GET_RANDOM_U32_BELOW
 	LC_HAVE_ACL_WITH_DENTRY
+
+	# Future
+	LC_FILEMAP_GET_FOLIO_PREALLOC
+	LC_FILEMAP_DIRTY_FOLIO_BATCHED
 
 	# kernel patch to extend integrity interface
 	LC_BIO_INTEGRITY_PREP_FN
