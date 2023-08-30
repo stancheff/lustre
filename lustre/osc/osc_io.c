@@ -377,8 +377,12 @@ int osc_io_write_iter_init(const struct lu_env *env,
 	struct cl_io *io = ios->cis_io;
 	struct osc_io *oio = osc_env_io(env);
 	struct osc_object *osc = cl2osc(ios->cis_obj);
+	struct obd_import *imp = osc_cli(osc)->cl_import;
 	unsigned long npages;
 	ENTRY;
+
+	if (unlikely(imp->imp_invalid))
+		RETURN(-EIO);
 
 	if (cl_io_is_append(io))
 		RETURN(osc_io_iter_init(env, ios));
