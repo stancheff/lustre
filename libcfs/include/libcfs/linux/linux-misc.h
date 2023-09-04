@@ -48,25 +48,33 @@
  * iter_is_iovec() and iov_iter_is_* are available, supply the missing
  * functionality for older kernels.
  */
-#ifndef HAVE_IOV_ITER_TYPE
+#ifdef HAVE_IOV_ITER_TYPE
+# ifndef HAVE_ENUM_ITER_PIPE
+#  define iov_iter_is_pipe(iter)	0
+# endif
+#else
 /*
  * Since 3.15-rc4 commit 71d8e532b1549a478e6a6a8a44f309d050294d00
  * The iov iterator has a type and can iterate over numerous vector types.
  * Prior to this only iovec is supported, so all iov_iter_is_* are false.
  */
-#ifdef HAVE_IOV_ITER_HAS_TYPE_MEMBER
-#define iter_is_iovec(iter)		((iter)->type & ITER_IOVEC)
-#define iov_iter_is_kvec(iter)		((iter)->type & ITER_KVEC)
-#define iov_iter_is_bvec(iter)		((iter)->type & ITER_BVEC)
-#define iov_iter_is_pipe(iter)		((iter)->type & ITER_PIPE)
-#define iov_iter_is_discard(iter)	((iter)->type & ITER_DISCARD)
-#else
-#define iter_is_iovec(iter)		1
-#define iov_iter_is_kvec(iter)		0
-#define iov_iter_is_bvec(iter)		0
-#define iov_iter_is_pipe(iter)		0
-#define iov_iter_is_discard(iter)	0
-#endif
+# ifdef HAVE_IOV_ITER_HAS_TYPE_MEMBER
+#  define iter_is_iovec(iter)		((iter)->type & ITER_IOVEC)
+#  define iov_iter_is_kvec(iter)	((iter)->type & ITER_KVEC)
+#  define iov_iter_is_bvec(iter)	((iter)->type & ITER_BVEC)
+#  if defined HAVE_ENUM_ITER_PIPE
+#   define iov_iter_is_pipe(iter)	((iter)->type & ITER_PIPE)
+#  else
+#   define iov_iter_is_pipe(iter)	0
+#  endif
+#  define iov_iter_is_discard(iter)	((iter)->type & ITER_DISCARD)
+# else
+#  define iter_is_iovec(iter)		1
+#  define iov_iter_is_kvec(iter)	0
+#  define iov_iter_is_bvec(iter)	0
+#  define iov_iter_is_pipe(iter)	0
+#  define iov_iter_is_discard(iter)	0
+# endif
 #endif /* HAVE_IOV_ITER_TYPE */
 
 int cfs_kernel_write(struct file *filp, const void *buf, size_t count,
