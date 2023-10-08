@@ -962,6 +962,10 @@ struct ll_sb_info {
 	/* Time in ms after last file close that we no longer count prior opens*/
 	u32			  ll_oc_max_ms;
 
+	/* I/O size thresholds for switching from buffered I/O to direct I/O */
+	u32			  ll_hybrid_io_write_threshold_bytes;
+	u32			  ll_hybrid_io_read_threshold_bytes;
+
 	/* filesystem fsname */
 	char			  ll_fsname[LUSTRE_MAXFSNAME + 1];
 
@@ -992,6 +996,11 @@ struct ll_sb_info {
 #define SBI_DEFAULT_OPENCACHE_THRESHOLD_COUNT	(5)
 #define SBI_DEFAULT_OPENCACHE_THRESHOLD_MS	(100) /* 0.1 second */
 #define SBI_DEFAULT_OPENCACHE_THRESHOLD_MAX_MS	(60000) /* 1 minute */
+
+/* 8 MiB is where reads are reliably better as DIO on most configs */
+#define SBI_DEFAULT_HYBRID_IO_READ_THRESHOLD	(8 * 1024 * 1024) /* 8 MiB */
+/* 2 MiB is where writes are reliably better as DIO on most configs */
+#define SBI_DEFAULT_HYBRID_IO_WRITE_THRESHOLD	(2 * 1024 * 1024) /* 2 MiB */
 
 /*
  * per file-descriptor read-ahead data.

@@ -218,6 +218,11 @@ static struct ll_sb_info *ll_init_sbi(struct lustre_sb_info *lsi)
 	sbi->ll_oc_thrsh_count = SBI_DEFAULT_OPENCACHE_THRESHOLD_COUNT;
 	sbi->ll_oc_max_ms = SBI_DEFAULT_OPENCACHE_THRESHOLD_MAX_MS;
 	sbi->ll_oc_thrsh_ms = SBI_DEFAULT_OPENCACHE_THRESHOLD_MS;
+	sbi->ll_hybrid_io_write_threshold_bytes =
+		SBI_DEFAULT_HYBRID_IO_WRITE_THRESHOLD;
+	sbi->ll_hybrid_io_read_threshold_bytes =
+		SBI_DEFAULT_HYBRID_IO_READ_THRESHOLD;
+
 	RETURN(sbi);
 out_destroy_ra:
 	if (sbi->ll_foreign_symlink_prefix)
