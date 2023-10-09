@@ -13969,6 +13969,74 @@ test_119j()
 }
 run_test 119j "basic tests of hybrid IO switching"
 
+test_119k()
+{
+	if [ $LINUX_VERSION_CODE -le $(version_code 4.5.0) ]; then
+		skip "needs kernel > 4.5.0 for ki_flags support"
+	fi
+
+	local hybrid_noswitch
+	local hybrid_writes
+	local hybrid_reads
+
+	$LCTL set_param llite.*.stats=c
+	# Test default cutover settings
+	# 1M is < default hybrid IO write size
+	dd if=/dev/zero bs=1M count=8 of=$DIR/$tfile || error "(0) dd failed"
+	hybrid_noswitch=($($LCTL get_param -n 'llite.*.stats' |
+			  sed -n '/hybrid_noswitch/,/^$/p' |
+			  awk '{print $2}'))
+	[[ $hybrid_noswitch == 8 ]] ||
+		error "(1) incorrect number of hybrid noswitch ($hybrid_noswitch), expected 8"
+	# 2M writes should be done with hybrid/DIO
+	dd if=/dev/zero bs=2M count=8 of=$DIR/$tfile || error "(2) dd failed"
+	hybrid_writes=($($LCTL get_param -n 'llite.*.stats' |
+			sed -n '/hybrid_writesize_switch/,/^$/p' |
+			awk '{print $2}'))
+	[[ $hybrid_writes == 8 ]] ||
+		error "(3) incorrect number of hybrid writes ($hybrid_writes), expected 8"
+
+	$LCTL set_param llite.*.stats=c
+	# Test default cutover settings
+	# 4M is < default hybrid IO read size
+	dd if=$DIR/$tfile bs=4M count=2 of=/dev/null || error "(4) dd failed"
+	hybrid_noswitch=($($LCTL get_param -n 'llite.*.stats' |
+			  sed -n '/hybrid_noswitch/,/^$/p' |
+			  awk '{print $2}'))
+	[[ $hybrid_noswitch == 2 ]] ||
+		error "(5) incorrect number of hybrid noswitch ($hybrid_noswitch), expected 2"
+	# 8M reads should be done with hybrid IO
+	dd if=$DIR/$tfile bs=8M count=2 of=/dev/null || error "(6) dd failed"
+	hybrid_reads=($($LCTL get_param -n 'llite.*.stats' |
+			sed -n '/hybrid_readsize_switch/,/^$/p' |
+			awk '{print $2}'))
+	[[ $hybrid_reads == 2 ]] ||
+		error "(7) incorrect number of hybrid reads ($hybrid_reads), expected 2"
+
+	$LCTL set_param llite.*.stats=c
+	$LCTL set_param llite.*.hybrid_io=0
+	# disable hybrid IO
+	stack_trap "$LCTL set_param llite.*.hybrid_io=1"
+
+	# Test default cutover settings
+	# 2M writes should be done with hybrid/DIO
+	dd if=/dev/zero bs=2M count=8 of=$DIR/$tfile || error "(8) dd failed"
+	hybrid_writes=($($LCTL get_param -n 'llite.*.stats' |
+			sed -n '/hybrid_writesize_switch/,/^$/p' |
+			awk '{print $2}'))
+	[[ -z $hybrid_writes ]] ||
+		error "(9) there should be no hybrid writes, but we have '$hybrid_writes'"
+
+	# 8M reads, but hybrid IO is disabled
+	dd if=$DIR/$tfile bs=8M count=2 of=/dev/null || error "(10) dd failed"
+	hybrid_reads=($($LCTL get_param -n 'llite.*.stats' |
+			sed -n '/hybrid_readsize_switch/,/^$/p' |
+			awk '{print $2}'))
+	[[ -z $hybrid_reads ]] ||
+		error "(11) there should be no hybrid reads, but we have '$hybrid_reads'"
+}
+run_test 119k "hybrid IO counting with stats and disabling"
+
 test_119m() {
 	rwv -f $DIR/$tfile -Dw -n 3 0x7ffff 0x100001 0x180000 ||
 		error "DIO unaligned writev test failed"
