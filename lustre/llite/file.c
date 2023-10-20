@@ -1720,6 +1720,7 @@ ll_hybrid_bio_dio_switch_check(struct file *file, struct kiocb *iocb,
 	 * because they're visible in userspace.  so we check for IOCB_DIRECT
 	 */
 #ifdef IOCB_DIRECT
+	struct ll_file_data *fd  = file->private_data;
 	struct inode *inode = file_inode(file);
 	struct ll_sb_info *sbi = ll_i2sbi(inode);
 	int op = LPROC_LL_HYBRID_NOSWITCH;
@@ -1741,20 +1742,34 @@ ll_hybrid_bio_dio_switch_check(struct file *file, struct kiocb *iocb,
 	if (!test_bit(LL_SBI_HYBRID_IO, sbi->ll_flags))
 		RETURN(false);
 
-	/* we only log hybrid IO stats if we hit the actual switching logic -
-	 * not if hybrid IO is disabled or the IO was never a candidate to
-	 * switch
-	 */
-	if (iot == CIT_WRITE &&
-	    count >= sbi->ll_hybrid_io_write_threshold_bytes) {
-		op = LPROC_LL_HYBRID_WRITESIZE_SWITCH;
-		GOTO(out, dio_switch = true);
-	}
+	if (fd->ll_previous_io_nonrotational) {
+		/* we only log hybrid IO stats if we hit the actual switching
+		 * logic - not if hybrid IO is disabled or the IO was never a
+		 * candidate to switch
+		 */
+		if (iot == CIT_WRITE &&
+		    count >= sbi->ll_hybrid_io_write_threshold_bytes) {
+			op = LPROC_LL_HYBRID_WRITESIZE_SWITCH;
+			GOTO(out, dio_switch = true);
+		}
 
-	if (iot == CIT_READ &&
-	    count >= sbi->ll_hybrid_io_read_threshold_bytes) {
-		op = LPROC_LL_HYBRID_READSIZE_SWITCH;
-		GOTO(out, dio_switch = true);
+		if (iot == CIT_READ &&
+		    count >= sbi->ll_hybrid_io_read_threshold_bytes) {
+			op = LPROC_LL_HYBRID_READSIZE_SWITCH;
+			GOTO(out, dio_switch = true);
+		}
+	} else {
+		if (iot == CIT_WRITE &&
+		    count >= sbi->ll_hybrid_io_hdd_write_threshold_bytes) {
+			op = LPROC_LL_HYBRID_WRITESIZE_SWITCH;
+			GOTO(out, dio_switch = true);
+		}
+
+		if (iot == CIT_READ &&
+		    count >= sbi->ll_hybrid_io_hdd_read_threshold_bytes) {
+			op = LPROC_LL_HYBRID_READSIZE_SWITCH;
+			GOTO(out, dio_switch = true);
+		}
 	}
 
 out:

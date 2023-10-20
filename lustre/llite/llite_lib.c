@@ -222,6 +222,10 @@ static struct ll_sb_info *ll_init_sbi(struct lustre_sb_info *lsi)
 		SBI_DEFAULT_HYBRID_IO_WRITE_THRESHOLD;
 	sbi->ll_hybrid_io_read_threshold_bytes =
 		SBI_DEFAULT_HYBRID_IO_READ_THRESHOLD;
+	sbi->ll_hybrid_io_hdd_write_threshold_bytes =
+		SBI_DEFAULT_HYBRID_IO_HDD_WRITE_THRESHOLD;
+	sbi->ll_hybrid_io_hdd_read_threshold_bytes =
+		SBI_DEFAULT_HYBRID_IO_HDD_READ_THRESHOLD;
 
 	RETURN(sbi);
 out_destroy_ra:
