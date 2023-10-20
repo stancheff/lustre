@@ -965,6 +965,8 @@ struct ll_sb_info {
 	/* I/O size thresholds for switching from buffered I/O to direct I/O */
 	u32			  ll_hybrid_io_write_threshold_bytes;
 	u32			  ll_hybrid_io_read_threshold_bytes;
+	u32			  ll_hybrid_io_hdd_write_threshold_bytes;
+	u32			  ll_hybrid_io_hdd_read_threshold_bytes;
 
 	/* filesystem fsname */
 	char			  ll_fsname[LUSTRE_MAXFSNAME + 1];
@@ -1002,6 +1004,9 @@ struct ll_sb_info {
 /* 2 MiB is where writes are reliably better as DIO on most configs */
 #define SBI_DEFAULT_HYBRID_IO_WRITE_THRESHOLD	(2 * 1024 * 1024) /* 2 MiB */
 
+// FIXME: Replace with numbers from experiment
+#define SBI_DEFAULT_HYBRID_IO_HDD_READ_THRESHOLD (16 * 1024 * 1024) /* 16 MiB */
+#define SBI_DEFAULT_HYBRID_IO_HDD_WRITE_THRESHOLD (8 * 1024 * 1024) /* 8 MiB */
 /*
  * per file-descriptor read-ahead data.
  */
