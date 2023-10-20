@@ -14037,6 +14037,49 @@ test_119k()
 }
 run_test 119k "hybrid IO counting with stats and disabling"
 
+test_119l()
+{
+	if [ $LINUX_VERSION_CODE -le $(version_code 4.5.0) ]; then
+		skip "needs kernel > 4.5.0 for ki_flags support"
+	fi
+
+	local hybrid_noswitch
+	local hybrid_writes
+	local hybrid_reads
+
+	$LFS setstripe -C 4 $DIR/$tfile.src
+	$LFS setstripe -C 4 $DIR/$tfile.dst
+
+	$LCTL set_param llite.*.stats=c
+	dd if=/dev/urandom bs=1M count=64 of=$DIR/$tfile.src ||
+		error "(0) dd to create source file failed"
+	hybrid_noswitch=($($LCTL get_param -n 'llite.*.stats' |
+			  sed -n '/hybrid_noswitch/,/^$/p' |
+			  awk '{print $2}'))
+	[[ $hybrid_noswitch == 64 ]] ||
+		error "(1) incorrect number of hybrid noswitch ($hybrid_noswitch), expected 64"
+
+	$LCTL set_param llite.*.stats=c
+	dd if=$DIR/$tfile.src bs=16M count=4 of=$DIR/$tfile.dst ||
+		error "(2) dd to create destination file failed"
+	hybrid_reads=($($LCTL get_param -n 'llite.*.stats' |
+			sed -n '/hybrid_readsize_switch/,/^$/p' |
+			awk '{print $2}'))
+	[[ $hybrid_reads == 4 ]] ||
+		error "(3) incorrect number of hybrid reads ($hybrid_reads), expected 4"
+	hybrid_writes=($($LCTL get_param -n 'llite.*.stats' |
+			sed -n '/hybrid_writesize_switch/,/^$/p' |
+			awk '{print $2}'))
+	[[ $hybrid_writes == 4 ]] ||
+		error "(4) incorrect number of hybrid writes ($hybrid_writes), expected 4"
+	cmp -bl $DIR/$tfile.src $DIR/$tfile.dst ||
+		error "(5) comparison of file copied with hybrid IO failed"
+
+	#TODO: Multi-process racing writes with hybrid IO
+
+}
+run_test 119l "consistency testing for hybrid IO"
+
 test_119m() {
 	rwv -f $DIR/$tfile -Dw -n 3 0x7ffff 0x100001 0x180000 ||
 		error "DIO unaligned writev test failed"
