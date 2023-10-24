@@ -1381,6 +1381,40 @@ static ssize_t hybrid_io_store(struct kobject *kobj, struct attribute *attr,
 }
 LUSTRE_RW_ATTR(hybrid_io);
 
+static ssize_t hybrid_io_to_zfs_show(struct kobject *kobj,
+				     struct attribute *attr, char *buf)
+{
+	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
+					      ll_kset.kobj);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n",
+			test_bit(LL_SBI_HYBRID_IO_TO_ZFS, sbi->ll_flags));
+}
+
+static ssize_t hybrid_io_to_zfs_store(struct kobject *kobj,
+				      struct attribute *attr,
+				      const char *buffer, size_t count)
+{
+	struct ll_sb_info *sbi = container_of(kobj, struct ll_sb_info,
+					      ll_kset.kobj);
+	bool val;
+	int rc;
+
+	rc = kstrtobool(buffer, &val);
+	if (rc)
+		return rc;
+
+	spin_lock(&sbi->ll_lock);
+	if (val)
+		set_bit(LL_SBI_HYBRID_IO_TO_ZFS, sbi->ll_flags);
+	else
+		clear_bit(LL_SBI_HYBRID_IO_TO_ZFS, sbi->ll_flags);
+	spin_unlock(&sbi->ll_lock);
+
+	return count;
+}
+LUSTRE_RW_ATTR(hybrid_io_to_zfs);
+
 static ssize_t max_read_ahead_async_active_show(struct kobject *kobj,
 					       struct attribute *attr,
 					       char *buf)
@@ -2240,7 +2274,6 @@ static struct attribute *llite_attrs[] = {
 	&lustre_attr_tiny_write.attr,
 	&lustre_attr_parallel_dio.attr,
 	&lustre_attr_unaligned_dio.attr,
-	&lustre_attr_hybrid_io.attr,
 	&lustre_attr_file_heat.attr,
 	&lustre_attr_heat_decay_percentage.attr,
 	&lustre_attr_heat_period_second.attr,
@@ -2248,6 +2281,8 @@ static struct attribute *llite_attrs[] = {
 	&lustre_attr_opencache_threshold_ms.attr,
 	&lustre_attr_opencache_max_ms.attr,
 	&lustre_attr_inode_cache.attr,
+	&lustre_attr_hybrid_io.attr,
+	&lustre_attr_hybrid_io_to_zfs.attr,
 	&lustre_attr_hybrid_io_write_threshold_bytes.attr,
 	&lustre_attr_hybrid_io_read_threshold_bytes.attr,
 	&lustre_attr_hybrid_io_hdd_write_threshold_bytes.attr,

@@ -13925,6 +13925,11 @@ test_119j()
 	fi
 
 	local rpcs
+	# Enable hybrid to ZFS for testing
+	local to_zfs=$(LCTL get_param -n llite.*.hybrid_io_to_zfs)
+	$LCTL set_param llite.*.hybrid_io_to_zfs=1
+	stack_trap '$LCTL set_param llite.*.hybrid_io_to_zfs=$to_zfs'
+
 	dd if=/dev/urandom of=$DIR/$tfile bs=8 count=1 || error "(0) dd failed"
 	sync
 	$LCTL set_param -n osc.*.rpc_stats=0
@@ -13978,6 +13983,11 @@ test_119k()
 	local hybrid_noswitch
 	local hybrid_writes
 	local hybrid_reads
+
+	# Enable hybrid to ZFS for testing
+	local to_zfs=$(LCTL get_param -n llite.*.hybrid_io_to_zfs)
+	$LCTL set_param llite.*.hybrid_io_to_zfs=1
+	stack_trap '$LCTL set_param llite.*.hybrid_io_to_zfs=$to_zfs'
 
 	$LCTL set_param llite.*.stats=c
 	# Test default cutover settings
@@ -14046,6 +14056,11 @@ test_119l()
 	local hybrid_noswitch
 	local hybrid_writes
 	local hybrid_reads
+
+	# Enable hybrid to ZFS for testing
+	local to_zfs=$(LCTL get_param -n llite.*.hybrid_io_to_zfs)
+	$LCTL set_param llite.*.hybrid_io_to_zfs=1
+	stack_trap '$LCTL set_param llite.*.hybrid_io_to_zfs=$to_zfs'
 
 	$LFS setstripe -C 4 $DIR/$tfile.src
 	$LFS setstripe -C 4 $DIR/$tfile.dst

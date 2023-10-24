@@ -163,6 +163,12 @@ struct import_state_hist {
 	time64_t		ish_time;
 };
 
+enum lustre_backing_fstype {
+	FSTYPE_LDISKFS	= 0,
+	FSTYPE_ZFS	= 1,
+	FSTYPE_LAST	= 2,
+};
+
 /**
  * Defintion of PortalRPC import structure.
  * Imports are representing client-side view to remote target.
@@ -334,6 +340,7 @@ struct obd_import {
 	u32			  imp_idle_timeout;
 	u32			  imp_idle_debug;
 	struct obd_connect_data	  imp_connect_data;
+	enum lustre_backing_fstype	imp_backing_fstype;
 	__u64			  imp_connect_flags_orig;
 	__u64			  imp_connect_flags2_orig;
 	int			  imp_connect_error;

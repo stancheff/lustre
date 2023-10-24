@@ -832,6 +832,7 @@ enum ll_sbi_flags {
 	LL_SBI_ENCRYPT_NAME,		/* name encryption */
 	LL_SBI_UNALIGNED_DIO,		/* unaligned DIO */
 	LL_SBI_HYBRID_IO,		/* allow BIO as DIO */
+	LL_SBI_HYBRID_IO_TO_ZFS,	/* do hybrid IO to ZFS targets */
 	LL_SBI_NUM_FLAGS
 };
 
@@ -1132,7 +1133,11 @@ struct ll_file_data {
 		     /* did the previos IO to this file hit nonrotational OSTs?
 		      * used by hybrid IO to help decide to switch or not
 		      */
-		     ll_previous_io_nonrotational:1;
+		     ll_previous_io_nonrotational:1,
+		     /* did the previos IO to this file hit nonrotational OSTs?
+		      * used by hybrid IO to help decide to switch or not
+		      */
+		     ll_previous_io_zfs:1;
 	/* Used by mirrored file to lead IOs to a specific mirror, usually
 	 * for mirror resync. 0 means default. */
 	__u32 fd_designated_mirror;

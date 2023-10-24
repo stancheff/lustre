@@ -1037,9 +1037,10 @@ static const match_table_t ll_sbi_flags_name = {
 	{LL_SBI_TINY_WRITE,		"tiny_write"},
 	{LL_SBI_FILE_HEAT,		"file_heat"},
 	{LL_SBI_PARALLEL_DIO,		"parallel_dio"},
-	{LL_SBI_HYBRID_IO,		"hybrid_io"},
 	{LL_SBI_ENCRYPT_NAME,		"name_encrypt"},
 	{LL_SBI_UNALIGNED_DIO,		"unaligned_dio"},
+	{LL_SBI_HYBRID_IO,		"hybrid_io"},
+	{LL_SBI_HYBRID_IO_TO_ZFS,	"hybrid_io_to_zfs"},
 };
 
 int ll_sbi_flags_seq_show(struct seq_file *m, void *v)

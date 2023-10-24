@@ -1742,6 +1742,15 @@ ll_hybrid_bio_dio_switch_check(struct file *file, struct kiocb *iocb,
 	if (!test_bit(LL_SBI_HYBRID_IO, sbi->ll_flags))
 		RETURN(false);
 
+	/* Default ZFS direct IO performance is incredibly bad due to the
+	 * requirement for full commit and commit interval (on the order of 1
+	 * DIO per 'commit interval' seconds), so it's never wise to switch if
+	 * we're using ZFS...  but we give users the option to override
+	 */
+	if (fd->ll_previous_io_zfs &&
+	    !test_bit(LL_SBI_HYBRID_IO_TO_ZFS, sbi->ll_flags))
+		RETURN(false);
+
 	if (fd->ll_previous_io_nonrotational) {
 		/* we only log hybrid IO stats if we hit the actual switching
 		 * logic - not if hybrid IO is disabled or the IO was never a
@@ -1868,6 +1877,7 @@ restart:
 			range_lock_init(&range, *ppos, *ppos + per_bytes - 1);
 
 		fd->ll_previous_io_nonrotational = io->ci_nonrotational;
+		fd->ll_previous_io_zfs = io->ci_zfs;
 		vio->vui_fd  = file->private_data;
 		vio->vui_iter = args->u.normal.via_iter;
 		vio->vui_iocb = args->u.normal.via_iocb;

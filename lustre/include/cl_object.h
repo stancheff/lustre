@@ -1978,7 +1978,11 @@ struct cl_io {
 	 * it's just used for optimization and an IO crossing OST types won't
 	 * be optimal anyway, this is fine
 	 */
-			     ci_nonrotational:1;
+			     ci_nonrotational:1,
+	/* does this IO touch an OST using ZFS?  If an IO touches any OST
+	 * using ZFS, this will be set.
+	 */
+			     ci_zfs:1;
 
 	/**
 	 * How many times the read has retried before this one.
