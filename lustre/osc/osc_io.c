@@ -1344,6 +1344,7 @@ static const struct cl_io_operations osc_io_ops = {
 int osc_io_init(const struct lu_env *env,
                 struct cl_object *obj, struct cl_io *io)
 {
+	struct obd_import *imp = osc_cli(cl2osc(obj))->cl_import;
 	struct obd_export *exp = osc_export(cl2osc(obj));
         struct osc_io *oio = osc_env_io(env);
 
@@ -1355,6 +1356,9 @@ int osc_io_init(const struct lu_env *env,
 
 	cl_io_top(io)->ci_nonrotational =
 			(exp->exp_obd->obd_osfs.os_state & OS_STATFS_NONROT);
+
+	if (imp->imp_backing_fstype == FSTYPE_ZFS)
+		cl_io_top(io)->ci_zfs = true;
 
         return 0;
 }
