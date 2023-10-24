@@ -1971,7 +1971,14 @@ struct cl_io {
 	 */
 			     ci_invalidate_page_cache:1,
 	/* was this IO switched from BIO to DIO for hybrid IO? */
-			     ci_hybrid_switched:1;
+			     ci_hybrid_switched:1,
+	/* is this IO non-rotational?  This is a bit of a hack - this is set by
+	 * whichever stripe the IO hits last.  This means if an IO hits
+	 * rotational and non-rotational OSTs, this might be wrong, but since
+	 * it's just used for optimization and an IO crossing OST types won't
+	 * be optimal anyway, this is fine
+	 */
+			     ci_nonrotational:1;
 
 	/**
 	 * How many times the read has retried before this one.

@@ -1852,6 +1852,7 @@ restart:
 		else
 			range_lock_init(&range, *ppos, *ppos + per_bytes - 1);
 
+		fd->ll_previous_io_nonrotational = io->ci_nonrotational;
 		vio->vui_fd  = file->private_data;
 		vio->vui_iter = args->u.normal.via_iter;
 		vio->vui_iocb = args->u.normal.via_iocb;
