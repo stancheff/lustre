@@ -1121,8 +1121,13 @@ struct ll_file_data {
 	/* Indicate whether need to report failure when close.
 	 * true: failure is known, not report again.
 	 * false: unknown failure, should report. */
-	bool fd_write_failed;
-	bool ll_lock_no_expand;
+	unsigned int fd_write_failed:1,
+		     /* do not expand dlmlock requests from this file */
+		     ll_lock_no_expand:1,
+		     /* did the previos IO to this file hit nonrotational OSTs?
+		      * used by hybrid IO to help decide to switch or not
+		      */
+		     ll_previous_io_nonrotational:1;
 	/* Used by mirrored file to lead IOs to a specific mirror, usually
 	 * for mirror resync. 0 means default. */
 	__u32 fd_designated_mirror;

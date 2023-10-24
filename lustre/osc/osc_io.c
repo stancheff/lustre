@@ -1353,6 +1353,9 @@ int osc_io_init(const struct lu_env *env,
 	if (!exp_connect_unaligned_dio(exp))
 		cl_io_top(io)->ci_allow_unaligned_dio = false;
 
+	cl_io_top(io)->ci_nonrotational =
+			(exp->exp_obd->obd_osfs.os_state & OS_STATFS_NONROT);
+
         return 0;
 }
 
