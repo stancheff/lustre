@@ -1,0 +1,27 @@
+Subject: [PATCH] P: rhel8/ext4-nocmtime
+
+---
+ fs/ext4/ext4.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/fs/ext4/ext4.h b/fs/ext4/ext4.h
+index adb577aa..218da6ec 100644
+--- a/fs/ext4/ext4.h
++++ b/fs/ext4/ext4.h
+@@ -985,6 +985,13 @@ enum {
+ 	I_DATA_SEM_EA
+ };
+ 
++static inline struct timespec64 ext4_current_time(struct inode *inode)
++{
++	if (IS_NOCMTIME(inode))
++		return inode_get_ctime(inode);
++	return current_time(inode);
++}
++#define current_time(a) ext4_current_time(a)
+ 
+ /*
+  * fourth extended file system inode data in memory
+-- 
+2.25.1
+
