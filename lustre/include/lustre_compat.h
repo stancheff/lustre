@@ -652,11 +652,83 @@ ssize_t iov_iter_get_pages_alloc2(struct iov_iter *i, struct page ***pages,
 #define migrate_folio	migratepage
 #endif
 
-#ifdef HAVE_REGISTER_SHRINKER_FORMAT_NAMED
-#define register_shrinker(_s) register_shrinker((_s), "%ps", (_s))
-#elif !defined(HAVE_REGISTER_SHRINKER_RET)
-#define register_shrinker(_s) (register_shrinker(_s), 0)
+struct ll_shrinker_ops {
+#ifdef HAVE_SHRINKER_COUNT
+	unsigned long (*count_objects)(struct shrinker *,
+				       struct shrink_control *sc);
+	unsigned long (*scan_objects)(struct shrinker *,
+				      struct shrink_control *sc);
+#else
+	int (*shrink)(struct shrinker *, struct shrink_control *sc);
 #endif
+	int seeks;	/* seeks to recreate an obj */
+};
+
+#ifndef HAVE_SHRINKER_ALLOC
+static inline void shrinker_free(struct shrinker *_s)
+{
+	unregister_shrinker(_s);
+	OBD_FREE_PTR(_s);
+}
+#endif
+
+static inline struct shrinker *
+ll_shrinker_create(struct ll_shrinker_ops *ops,unsigned int flags,
+		   const char *fmt, ...)
+{
+	struct shrinker *_s;
+	int err = 0;
+
+#if defined(HAVE_REGISTER_SHRINKER_FORMAT_NAMED) || defined(HAVE_SHRINKER_ALLOC)
+	struct va_format vaf;
+	va_list args;
+#endif
+
+#ifdef HAVE_SHRINKER_ALLOC
+	va_start(args, fmt);
+	vaf.fmt = fmt;
+	vaf.va = &args;
+	_s = shrinker_alloc(flags, "%pV", &vaf);
+	va_end(args);
+#else
+	OBD_ALLOC_PTR(_s);
+#endif
+	if (!_s)
+		return ERR_PTR(-ENOMEM);
+
+#ifdef HAVE_SHRINKER_COUNT
+	_s->count_objects = ops->count_objects;
+	_s->scan_objects = ops->scan_objects;
+#else
+	_s->shrink = ops->shrink;
+#endif
+	_s->seeks = ops->seeks;
+
+#ifdef HAVE_SHRINKER_ALLOC
+	shrinker_register(_s);
+#else
+ #ifdef HAVE_REGISTER_SHRINKER_FORMAT_NAMED
+	va_start(args, fmt);
+	vaf.fmt = fmt;
+	vaf.va = &args;
+	err = register_shrinker(_s, "%pV", &vaf);
+	va_end(args);
+ #elif defined(HAVE_REGISTER_SHRINKER_RET)
+	err = register_shrinker(_s);
+ #else
+	register_shrinker(_s);
+ #endif
+#endif
+	if (err) {
+#ifdef HAVE_SHRINKER_ALLOC
+		shrinker_free(_s);
+#else
+		OBD_FREE_PTR(_s);
+#endif
+		_s = ERR_PTR(err);
+	}
+	return _s;
+}
 
 #ifndef fallthrough
 # if defined(__GNUC__) && __GNUC__ >= 7

@@ -268,7 +268,7 @@ static unsigned long enc_pools_shrink_scan(struct shrinker *s,
 }
 
 #ifdef HAVE_SHRINKER_COUNT
-static struct shrinker pools_shrinker = {
+static struct ll_shrinker_ops pools_sh_ops = {
 	.count_objects	= enc_pools_shrink_count,
 	.scan_objects	= enc_pools_shrink_scan,
 	.seeks		= DEFAULT_SEEKS,
@@ -286,11 +286,13 @@ static int enc_pools_shrink(struct shrinker *shrinker,
 	return enc_pools_shrink_count(shrinker, sc);
 }
 
-static struct shrinker pools_shrinker = {
+static struct ll_shrinker_ops pools_sh_ops = {
 	.shrink  = enc_pools_shrink,
 	.seeks   = DEFAULT_SEEKS,
 };
 #endif /* HAVE_SHRINKER_COUNT */
+
+static struct shrinker *pools_shrinker;
 
 static inline
 int npages_to_npools(unsigned long npages)
@@ -856,7 +858,8 @@ int sptlrpc_enc_pool_init(void)
 	if (page_pools.epp_pools == NULL)
 		return -ENOMEM;
 
-	rc = register_shrinker(&pools_shrinker);
+	pools_shrinker = ll_shrinker_create(&pools_sh_ops, 0, "pools");
+	rc = PTR_ERR_OR_ZERO(pools_shrinker);
 	if (rc)
 		enc_pools_free();
 
@@ -870,7 +873,7 @@ void sptlrpc_enc_pool_fini(void)
 	LASSERT(page_pools.epp_pools);
 	LASSERT(page_pools.epp_total_pages == page_pools.epp_free_pages);
 
-	unregister_shrinker(&pools_shrinker);
+	shrinker_free(pools_shrinker);
 
 	npools = npages_to_npools(page_pools.epp_total_pages);
 	cleaned = enc_pools_cleanup(page_pools.epp_pools, npools);
