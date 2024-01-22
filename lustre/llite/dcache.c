@@ -306,15 +306,17 @@ void ll_lookup_finish_locks(struct lookup_intent *it, struct dentry *dentry)
 static int ll_revalidate_dentry(struct dentry *dentry,
 				unsigned int lookup_flags)
 {
-	struct inode *dir = dentry->d_parent->d_inode;
+	struct dentry *parent = dget_parent(dentry);
+	struct inode *dir = d_inode(parent);
 	int rc;
 
+	ENTRY;
 	CDEBUG(D_VFSTRACE, "VFS Op:name=%s, flags=%u\n",
 	       dentry->d_name.name, lookup_flags);
 
 	rc = llcrypt_d_revalidate(dentry, lookup_flags);
 	if (rc != 1)
-		return rc;
+		GOTO(out, rc);
 
 	/* If this is intermediate component path lookup and we were able to get
 	 * to this dentry, then its lock has not been revoked and the
@@ -322,7 +324,7 @@ static int ll_revalidate_dentry(struct dentry *dentry,
 	if (lookup_flags & (LOOKUP_CONTINUE | LOOKUP_PARENT)) {
 		if (dentry->d_inode && S_ISDIR(dentry->d_inode->i_mode))
 			ll_update_dir_depth_dmv(dir, dentry);
-		return 1;
+		GOTO(out, rc = 1);
 	}
 
 	/* Symlink - always valid as long as the dentry was found */
@@ -334,9 +336,9 @@ static int ll_revalidate_dentry(struct dentry *dentry,
 	if (d_is_symlink(dentry)) {
 		if (!S_ISLNK(dentry->d_inode->i_mode) &&
 		    !(lookup_flags & LOOKUP_FOLLOW))
-			return 0;
+			GOTO(out, rc = 0);
 		else
-			return 1;
+			GOTO(out, rc = 1);
 	}
 
 	/*
@@ -346,10 +348,10 @@ static int ll_revalidate_dentry(struct dentry *dentry,
 	 * not by fid.
 	 */
 	if (lookup_flags & LOOKUP_REVAL)
-		return 0;
+		GOTO(out, rc = 0);
 
 	if (lookup_flags & LOOKUP_RCU)
-		return -ECHILD;
+		GOTO(out, rc = -ECHILD);
 
 	if (dentry_may_statahead(dir, dentry))
 		ll_revalidate_statahead(dir, &dentry, dentry->d_inode == NULL);
@@ -357,7 +359,11 @@ static int ll_revalidate_dentry(struct dentry *dentry,
 	if (dentry->d_inode && S_ISDIR(dentry->d_inode->i_mode))
 		ll_update_dir_depth_dmv(dir, dentry);
 
-	return 1;
+	rc = 1;
+out:
+	dput(parent);
+
+	RETURN(rc);
 }
 
 const struct dentry_operations ll_d_ops = {
