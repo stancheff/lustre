@@ -13918,6 +13918,20 @@ test_119i()
 }
 run_test 119i "test unaligned aio at varying sizes"
 
+test_119m() {
+	rwv -f $DIR/$tfile -Dw -n 3 0x7ffff 0x100001 0x180000 ||
+		error "DIO unaligned writev test failed"
+	rwv -f $DIR/$tfile -Dr -v -n 2 0x180000 0x100001 ||
+		error "DIO unaligned readv failed"
+	rm -f $DIR/$tfile
+	rwv -f $DIR/$tfile -Dw -n 3 0x80000 0x100000 0x180000 ||
+		error "DIO aligned writev test failed"
+	rwv -f $DIR/$tfile -Dr -v -n 2 0x180000 0x100000 ||
+		error "DIO aligned readv failed"
+	rm -f $DIR/$tfile
+}
+run_test 119m "Test DIO readv/writev: exercise iter duplication"
+
 test_120a() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
 	remote_mds_nodsh && skip "remote MDS with nodsh"

@@ -252,9 +252,10 @@ static ssize_t ll_get_user_pages(int rw, struct iov_iter *iter,
 
 	result = iov_iter_get_pages_alloc2(iter, &pvec->ldp_pages, maxsize,
 					  &start);
-	if (result > 0)
+	if (result > 0) {
 		pvec->ldp_count = DIV_ROUND_UP(result + start, PAGE_SIZE);
-
+		iov_iter_revert(iter, result);
+	}
 	return result;
 #else
 	unsigned long addr;
@@ -622,7 +623,7 @@ ll_direct_IO_impl(struct kiocb *iocb, struct iov_iter *iter, int rw)
 		}
 
 		if (unaligned && rw == WRITE) {
-			result = ll_dio_user_copy(sdio, iter);
+			result = ll_dio_user_copy(sdio);
 			if (unlikely(result <= 0)) {
 				cl_sync_io_note(env, &sdio->csd_sync, result);
 				if (sync_submit) {
