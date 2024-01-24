@@ -634,8 +634,19 @@ static inline bool is_root_inode(struct inode *inode)
 #endif
 
 #ifndef HAVE_IOV_ITER_GET_PAGES_ALLOC2
-#define iov_iter_get_pages_alloc2(i, p, m, s) \
-	iov_iter_get_pages_alloc((i), (p), (m), (s))
+static inline
+ssize_t iov_iter_get_pages_alloc2(struct iov_iter *i, struct page ***pages,
+				  size_t maxsize, size_t *start)
+{
+	ssize_t result;
+
+	/* iov_iter_get_pages_alloc is non advancing version of alloc2 */
+	result = iov_iter_get_pages_alloc(i, pages, maxsize, start);
+	if (result > 0 && user_backed_iter(i))
+		iov_iter_advance(i, result);
+
+	return result;
+}
 #endif
 
 #ifdef HAVE_AOPS_MIGRATE_FOLIO
