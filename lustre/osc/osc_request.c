@@ -1518,7 +1518,7 @@ static inline u32 interop_pages(u64 foffset, u32 npgs, struct brw_page **pga)
 
 static int
 osc_brw_prep_request(int cmd, struct client_obd *cli, struct obdo *oa,
-		     u32 page_count, struct brw_page **pga,
+		     u32 page_count, u32 excess, struct brw_page **pga,
 		     struct ptlrpc_request **reqp, int resend)
 {
 	struct ptlrpc_request *req;
@@ -1774,7 +1774,7 @@ retry_encrypt:
 		iop_pages = interop_pages(foffset, page_count, pga);
 	/* need interop but server does not support, return failure */
 	if (iop_pages && !imp_connect_unaligned_dio(cli->cl_import))
-			GOTO(out, rc = -EINVAL); /* -EDQUOT? */
+		GOTO(out, rc = -EDEADLK); /* -EDQUOT? */
 
 	desc = ptlrpc_prep_bulk_imp(req, page_count,
 		cli->cl_import->imp_connect_data.ocd_brw_size >> LNET_MTU_BITS,
@@ -1985,6 +1985,7 @@ no_bulk:
 	aa->aa_requested_nob = requested_nob;
 	aa->aa_nio_count = niocount;
 	aa->aa_page_count = page_count;
+	aa->aa_excess = excess;
 	aa->aa_resends = 0;
 	aa->aa_ppga = pga;
 	aa->aa_cli = cli;
@@ -2448,7 +2449,7 @@ static int osc_brw_redo_request(struct ptlrpc_request *request,
 	rc = osc_brw_prep_request(lustre_msg_get_opc(request->rq_reqmsg) ==
 				OST_WRITE ? OBD_BRW_WRITE : OBD_BRW_READ,
 				  aa->aa_cli, aa->aa_oa, aa->aa_page_count,
-				  aa->aa_ppga, &new_req, 1);
+				  aa->aa_excess, aa->aa_ppga, &new_req, 1);
 	if (rc)
 		RETURN(rc);
 
@@ -2695,7 +2696,7 @@ static int brw_interpret(const struct lu_env *env,
 		       aa->aa_requested_nob :
 		       req->rq_bulk->bd_nob_transferred);
 
-	osc_release_ppga(aa->aa_ppga, aa->aa_page_count);
+	osc_release_ppga(aa->aa_ppga, aa->aa_page_count + aa->aa_excess);
 	ptlrpc_lprocfs_brw(req, transferred);
 
 	spin_lock(&cli->cl_loi_list_lock);
@@ -2757,6 +2758,7 @@ int osc_build_rpc(const struct lu_env *env, struct client_obd *cli,
 	int mpflag = 1;
 	int mem_tight = 0;
 	int page_count = 0;
+	int over = 0;
 	bool soft_sync = false;
 	bool ndelay = false;
 	bool srvlock = false;
@@ -2861,9 +2863,82 @@ int osc_build_rpc(const struct lu_env *env, struct client_obd *cli,
 		}
 	}
 
+resend:
 	sort_brw_pages(pga, page_count);
-	rc = osc_brw_prep_request(cmd, cli, oa, page_count, pga, &req, 0);
-	if (rc != 0) {
+	rc = osc_brw_prep_request(cmd, cli, oa, page_count, over, pga, &req, 0);
+	if (rc == -EDEADLK) {
+		struct osc_extent *at;
+		struct osc_extent *oe;
+		pgoff_t start;
+		pgoff_t end;
+		u64 foffset = pga[0]->bp_off;
+		int n;
+
+		for (n = 0; n < page_count; n++)
+			if (interop_pages(foffset, n, pga))
+				break;
+		i = --n;
+		oap = brw_page2oap(pga[i]);
+		start = osc_index(oap2osc(oap));
+		at = list_first_entry_or_null(ext_list, typeof(*at), oe_link);
+		if (!at)
+			GOTO(out, -EINVAL);
+		/* shift to the best extent to shift pages/grants from */
+		ext = osc_extent_clone(obj, at);
+		if (!ext)
+			GOTO(out, -ENOMEM);
+		ext->oe_start = start;
+		n = page_count;
+		for (; i < n; i++) {
+			oap = brw_page2oap(pga[i]);
+			end = osc_index(oap2osc(oap));
+			ext->oe_end = end;
+			list_del_init(&oap->oap_rpc_item);
+			list_del_init(&oap->oap_pending_item);
+			list_add_tail(&oap->oap_pending_item, &ext->oe_pages);
+		}
+		/* migrate grants and pages */
+		list_for_each_entry_safe(at, oe, ext_list, oe_link) {
+			int npages = 0;
+			u64 bytes = 0;
+			u64 moved = 0;
+			pgoff_t index;
+
+			start = -1;
+			end = 0;
+			list_for_each_entry(oap, &at->oe_pages,
+					    oap_pending_item) {
+				npages++;
+				bytes += oap->oap_count;
+				index = osc_index(oap2osc(oap));
+				if (index < start)
+					start = index;
+				if (index > end)
+					end = index;
+			}
+			if (at->oe_nr_pages > npages) {
+				if (at->oe_grants > bytes) {
+					moved = at->oe_grants - bytes;
+					grant -= moved;
+					ext->oe_grants += moved;
+				}
+				moved = at->oe_nr_pages - npages;
+				at->oe_nr_pages -= moved;
+				ext->oe_nr_pages += moved;
+				page_count -= moved;
+				over += moved;
+			}
+			/* re-queue extent if it has pages */
+			if (npages) {
+				at->oe_end = end;
+				at->oe_start = start;
+				at->oe_no_merge = 1;
+			}
+		}
+		osc_extent_queue(obj, ext, false);
+		goto resend;
+	}
+	if (rc) {
 		CERROR("%s: prep_req failed: rc = %d\n",
 		       cli->cl_import->imp_obd->obd_name, rc);
 		GOTO(out, rc);
@@ -2953,7 +3028,7 @@ out:
 			OBD_SLAB_FREE_PTR(oa, osc_obdo_kmem);
 		if (pga) {
 			osc_release_bounce_pages(pga, page_count);
-			osc_release_ppga(pga, page_count);
+			osc_release_ppga(pga, page_count + over);
 		}
 		/* this should happen rarely and is pretty bad, it makes the
 		 * pending list not follow the dirty order
@@ -2983,7 +3058,7 @@ void osc_send_empty_rpc(struct osc_object *osc, pgoff_t start)
 	/* For updated servers - don't do a read */
 	oa.o_flags = OBD_FL_NORPC;
 
-	rc = osc_brw_prep_request(OBD_BRW_READ, osc_cli(osc), &oa, 1, &pga,
+	rc = osc_brw_prep_request(OBD_BRW_READ, osc_cli(osc), &oa, 1, 0, &pga,
 				  &req, 0);
 
 	/* If we succeeded we ship it off, if not there's no point in doing

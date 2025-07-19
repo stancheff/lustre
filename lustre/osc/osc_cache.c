@@ -35,8 +35,6 @@ static int osc_make_ready(const struct lu_env *env, struct osc_async_page *oap,
 			  int cmd);
 static int osc_refresh_count(const struct lu_env *env, struct osc_object *osc,
 			     struct osc_async_page *oap, int cmd);
-static int osc_io_unplug_async(const struct lu_env *env,
-			       struct client_obd *cli, struct osc_object *osc);
 static void osc_free_grant(struct client_obd *cli, struct client_memcg *cmemcg,
 			   unsigned int nr_pages, unsigned int lost_grant,
 			   unsigned int dirty_grant);
@@ -347,6 +345,56 @@ static void osc_extent_free(struct kref *kref)
 	OBD_SLAB_FREE_PTR(ext, osc_extent_kmem);
 #endif
 }
+
+struct osc_extent *osc_extent_clone(struct osc_object *obj,
+				    struct osc_extent *base)
+{
+	struct osc_extent *ext;
+
+	ext = osc_extent_alloc(obj);
+	if (!ext)
+		RETURN(ext);
+
+	ext->oe_rw = base->oe_rw;
+	ext->oe_sync = base->oe_sync;
+	ext->oe_no_merge = base->oe_no_merge;
+	ext->oe_urgent = base->oe_urgent;
+	ext->oe_end = base->oe_end;
+	ext->oe_max_end = base->oe_max_end;
+	ext->oe_obj = obj;
+	ext->oe_srvlock = base->oe_srvlock;
+	ext->oe_ndelay = base->oe_ndelay;
+	ext->oe_dio = base->oe_dio;
+	ext->oe_csd = base->oe_csd;
+	if (base->oe_dlmlock)
+		ext->oe_dlmlock = ldlm_lock_get(base->oe_dlmlock);
+	ext->oe_is_rdma_only = base->oe_is_rdma_only;
+	ext->oe_mppr = base->oe_mppr;
+	ext->oe_layout_version = base->oe_layout_version;
+	ext->oe_grants = 0;
+	ext->oe_nr_pages = 0;
+
+	return ext;
+}
+EXPORT_SYMBOL(osc_extent_clone);
+
+void osc_extent_queue(struct osc_object *obj, struct osc_extent *ext, bool del)
+{
+	osc_object_lock(obj);
+	if (del)
+		list_del_init(&ext->oe_link);
+
+	if (!ext->oe_rw) { /* write */
+		list_add_tail(&ext->oe_link, &obj->oo_urgent_exts);
+		osc_update_pending(obj, OBD_BRW_WRITE, ext->oe_nr_pages);
+	} else {
+		list_add_tail(&ext->oe_link, &obj->oo_reading_exts);
+		osc_update_pending(obj, OBD_BRW_READ, ext->oe_nr_pages);
+	}
+	osc_extent_state_set(ext, OES_LOCK_DONE);
+	osc_object_unlock(obj);
+}
+EXPORT_SYMBOL(osc_extent_queue);
 
 static struct osc_extent *osc_extent_get(struct osc_extent *ext)
 {
