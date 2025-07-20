@@ -830,8 +830,8 @@ enum cl_lock_mode {
  * Requested transfer type.
  */
 enum cl_req_type {
-	CRT_READ,
-	CRT_WRITE,
+	CRT_READ = READ,
+	CRT_WRITE = WRITE,
 	CRT_NR
 };
 
