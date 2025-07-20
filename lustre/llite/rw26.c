@@ -927,6 +927,7 @@ static int ll_write_end(struct file *file, struct address_space *mapping,
 	LASSERT(cl_page_is_owned(page, io));
 	if (copied > 0) {
 		struct cl_page_list *plist = &vio->u.readwrite.vui_queue;
+#ifndef HAVE_STRUCT_PAGE_MEM_CGROUP
 #ifdef SB_I_CGROUPWB
 		struct inode *inode = file_inode(file);
 		struct bdi_writeback *wb;
@@ -938,8 +939,7 @@ static int ll_write_end(struct file *file, struct address_space *mapping,
 		inode_attach_wb(inode, vmpage);
 #endif
 		wb = inode_to_wb(inode);
-		LASSERTF(wb != NULL, "wb@%pK\n", wb);
-		if (wb->dirty_exceeded) {
+		if (wb && wb->dirty_exceeded) {
 			unplug = true;
 			prio = IO_PRIO_URGENT;
 			CDEBUG(D_IOTRACE, "wb@%pK dirty_ratelimit=%lu balanced_dirty_ratelimit=%lu dirty_exceeded=%d state=%lX last_old_flush=%lu\n",
@@ -950,6 +950,7 @@ static int ll_write_end(struct file *file, struct address_space *mapping,
 		}
 		spin_unlock(&inode->i_lock);
 #endif
+#endif /* HAVE_STRUCT_PAGE_MEM_CGROUP */
 
 		lcc->lcc_page = NULL; /* page will be queued */
 

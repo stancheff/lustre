@@ -374,6 +374,10 @@ int client_obd_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 	       min_t(unsigned int, LUSTRE_CFG_BUFLEN(lcfg, 2),
 		     sizeof(server_uuid)));
 
+#ifdef HAVE_STRUCT_PAGE_MEM_CGROUP
+	cli->cl_memcg_root = RB_ROOT;
+	init_rwsem(&cli->cl_rwsem);
+#endif
 	cli->cl_dirty_pages = 0;
 	cli->cl_dirty_max_pages = 0;
 	cli->cl_avail_grant = 0;
@@ -567,11 +571,29 @@ err:
 }
 EXPORT_SYMBOL(client_obd_setup);
 
+static inline void cmemcg_destroy(struct client_obd *cli)
+{
+#ifdef HAVE_STRUCT_PAGE_MEM_CGROUP
+	struct rb_node *node;
+	struct client_memcg *cmemcg;
+
+	down_write(&cli->cl_rwsem);
+	while ((node = rb_first(&cli->cl_memcg_root))) {
+		cmemcg = container_of(node, struct client_memcg, m_rbnode);
+		rb_erase(&cmemcg->m_rbnode, &cli->cl_memcg_root);
+		OBD_FREE_PTR(cmemcg);
+	}
+	up_write(&cli->cl_rwsem);
+#endif
+}
+
 void client_obd_cleanup(struct obd_device *obd)
 {
 	struct client_obd *cli = &obd->u.cli;
 
 	ENTRY;
+
+	cmemcg_destroy(cli);
 
 	ldlm_namespace_free_post(obd->obd_namespace);
 	obd->obd_namespace = NULL;
@@ -765,6 +787,101 @@ out_disconnect:
 	RETURN(rc);
 }
 EXPORT_SYMBOL(client_disconnect_export);
+
+#ifdef HAVE_STRUCT_PAGE_MEM_CGROUP
+static int cmp_key_memcg(const void *memcg, const struct rb_node *node)
+{
+	struct client_memcg *cmemcg;
+
+	cmemcg = container_of(node, struct client_memcg, m_rbnode);
+	return memcg - (void *)cmemcg->m_memcg;
+}
+
+static int cmp_node_memcg(struct rb_node *left, const struct rb_node *node)
+{
+	struct client_memcg *cmemcg;
+
+	cmemcg = container_of(left, struct client_memcg, m_rbnode);
+	return cmp_key_memcg(cmemcg->m_memcg, node);
+}
+
+static struct client_memcg *cmemcg_insert(struct client_obd *cli,
+					  struct client_memcg *cmg)
+{
+	struct client_memcg *ex_cmg = NULL;
+	struct rb_node *node;
+
+	node = rb_find_add(&cmg->m_rbnode, &cli->cl_memcg_root, cmp_node_memcg);
+	if (node)
+		ex_cmg = container_of(node, struct client_memcg, m_rbnode);
+	return ex_cmg;
+}
+
+static struct client_memcg *cmemcg_add(struct client_obd *cli,
+				       struct mem_cgroup *memcg)
+{
+	struct client_memcg *cmemcg;
+	struct client_memcg *existing;
+	unsigned long max;
+
+	OBD_ALLOC_PTR(cmemcg);
+	if (!cmemcg)
+		return ERR_PTR(-ENOMEM);
+
+	max = READ_ONCE(memcg->memory.max);
+	cmemcg->m_memcg = memcg;
+	cmemcg->m_dirty_max_pages = max >> 3;
+	cmemcg->m_dirty_pages = 0;
+
+	down_write(&cli->cl_rwsem);
+	existing = cmemcg_insert(cli, cmemcg);
+	up_write(&cli->cl_rwsem);
+	if (existing) {
+		OBD_FREE_PTR(cmemcg);
+		cmemcg = existing;
+	}
+	return cmemcg;
+}
+
+#define MEMCG_DEFAULT_MAX	((-1L) >> PAGE_SHIFT)
+
+struct client_memcg *cmemcg_find(struct client_obd *cli, struct folio *folio)
+{
+	struct client_memcg *cmemcg;
+	struct mem_cgroup *memcg = folio_memcg(folio);
+	struct rb_node *node;
+	unsigned long max;
+
+	if (mem_cgroup_disabled())
+		return NULL;
+	max = READ_ONCE(memcg->memory.max); /* max pages */
+	if (max >= MEMCG_DEFAULT_MAX)
+		return NULL;
+	if (max >= cfs_totalram_pages())
+		return NULL;
+
+	down_read(&cli->cl_rwsem);
+	node = rb_find(memcg, &cli->cl_memcg_root, cmp_key_memcg);
+	up_read(&cli->cl_rwsem);
+	if (node) {
+		cmemcg = container_of(node, struct client_memcg, m_rbnode);
+		return cmemcg;
+	}
+	cmemcg = cmemcg_add(cli, memcg);
+
+	return cmemcg;
+}
+EXPORT_SYMBOL(cmemcg_find);
+
+void cmemcg_remove(struct client_obd *cli, struct client_memcg *cmemcg)
+{
+	down_write(&cli->cl_rwsem);
+	rb_erase(&cmemcg->m_rbnode, &cli->cl_memcg_root);
+	up_write(&cli->cl_rwsem);
+	OBD_FREE_PTR(cmemcg);
+}
+EXPORT_SYMBOL(cmemcg_remove);
+#endif /* HAVE_STRUCT_PAGE_MEM_CGROUP */
 
 #ifdef HAVE_SERVER_SUPPORT
 int server_disconnect_export(struct obd_export *exp)

@@ -1265,6 +1265,37 @@ AC_DEFUN([LC_PERCPU_COUNTER_INIT], [
 ]) # LC_PERCPU_COUNTER_INIT
 
 #
+# Linux commit v3.18-2157-g1306a85aed3e
+#  mm: embed the memcg pointer directly into struct page
+#
+# LC_HAVE_STRUCT_PAGE_MEM_CGROUP
+#
+AC_DEFUN([LC_SRC_HAVE_STRUCT_PAGE_MEM_CGROUP], [
+	LB2_LINUX_TEST_SRC([struct_page.mem_cgroup], [
+		#include <linux/mm_types.h>
+		#include <linux/memcontrol.h>
+	],[
+#ifdef HAVE_INVALIDATE_FOLIO
+		struct folio *folio = NULL;
+		struct mem_cgroup *memcg = folio_memcg(folio);
+#else
+		struct page *pg = NULL;
+		struct mem_cgroup *memcg = pg->mem_cgroup;
+#endif
+		unsigned long max __attribute__ ((unused));
+
+		max = READ_ONCE(memcg->memory.max);
+	])
+])
+AC_DEFUN([LC_HAVE_STRUCT_PAGE_MEM_CGROUP], [
+	LB2_MSG_LINUX_TEST_RESULT([if struct page has mem_cgroup member],
+	[struct_page.mem_cgroup], [
+		AC_DEFINE(HAVE_STRUCT_PAGE_MEM_CGROUP, 1,
+			[struct page has mem_cgroup member])
+	])
+]) # LC_HAVE_STRUCT_PAGE_MEM_CGROUP
+
+#
 # LC_KIOCB_HAS_NBYTES
 #
 # 3.19 kernel removed ki_nbytes from struct kiocb
@@ -5244,6 +5275,7 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_PERCPU_COUNTER_INIT
 
 	# 3.19
+	LC_SRC_HAVE_STRUCT_PAGE_MEM_CGROUP
 	LC_SRC_KIOCB_HAS_NBYTES
 	LC_SRC_HAVE_DQUOT_QC_DQBLK
 	LC_SRC_HAVE_AIO_COMPLETE
@@ -5405,7 +5437,6 @@ AC_DEFUN([LC_PROG_LINUX_SRC], [
 	LC_SRC_HAVE_KIOCB_COMPLETE_2ARGS
 
 	# 5.17
-	LC_SRC_HAVE_INVALIDATE_FOLIO
 	LC_SRC_HAVE_DIRTY_FOLIO
 
 	# 5.18
@@ -5573,6 +5604,7 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_NFS_FILLDIR_USE_CTX
 
 	# 3.19
+	LC_HAVE_STRUCT_PAGE_MEM_CGROUP
 	LC_KIOCB_HAS_NBYTES
 	LC_HAVE_DQUOT_QC_DQBLK
 	LC_HAVE_AIO_COMPLETE
@@ -5745,7 +5777,6 @@ AC_DEFUN([LC_PROG_LINUX_RESULTS], [
 	LC_HAVE_WB_STAT_MOD
 
 	# 5.17
-	LC_HAVE_INVALIDATE_FOLIO
 	LC_HAVE_DIRTY_FOLIO
 
 	# 5.18

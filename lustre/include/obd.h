@@ -19,6 +19,7 @@
 #include <linux/kobject.h>
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
+#include <linux/memcontrol.h>
 #include <lustre_compat/linux/xarray.h>
 
 #include <uapi/linux/lustre/lustre_idl.h>
@@ -149,6 +150,14 @@ enum obd_cl_sem_lock_class {
 };
 
 struct obd_import;
+
+struct client_memcg {
+	struct mem_cgroup	*m_memcg;
+	struct rb_node		 m_rbnode;
+	unsigned long		 m_dirty_pages;
+	unsigned long		 m_dirty_max_pages;
+};
+
 struct client_obd {
 	struct rw_semaphore	 cl_sem;
 	struct obd_uuid		 cl_target_uuid;
@@ -207,7 +216,10 @@ struct client_obd {
 	unsigned long		 cl_lost_grant;    /* lost credits (trunc) */
 	/* grant consumed for dirty pages */
 	unsigned long		 cl_dirty_grant;
-
+#ifdef HAVE_STRUCT_PAGE_MEM_CGROUP
+	struct rw_semaphore	 cl_rwsem;	/* rbtree locking */
+	struct rb_root		 cl_memcg_root;
+#endif
 	/* since we allocate grant by blocks, we don't know how many grant will
 	 * be used to add a page into cache. As a solution, we reserve maximum
 	 * grant before trying to dirty a page and unreserve the rest.
@@ -366,6 +378,21 @@ struct client_obd {
 	struct list_head	cl_chg_dev_linkage;
 };
 #define obd2cli_tgt(obd) ((char *)(obd)->u.cli.cl_target_uuid.uuid)
+
+#ifdef HAVE_STRUCT_PAGE_MEM_CGROUP
+struct client_memcg *cmemcg_find(struct client_obd *cli, struct folio *folio);
+void cmemcg_remove(struct client_obd *cli, struct client_memcg *cmemcg);
+#else
+static inline struct client_memcg *cmemcg_find(struct client_obd *cli,
+					       void *folio)
+{
+	return NULL;
+}
+static inline void cmemcg_remove(struct client_obd *cli,
+				 struct client_memcg *cmemcg)
+{
+}
+#endif
 
 struct obd_id_info {
 	u32	 idx;

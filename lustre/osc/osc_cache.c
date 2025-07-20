@@ -37,8 +37,9 @@ static int osc_refresh_count(const struct lu_env *env, struct osc_object *osc,
 			     struct osc_async_page *oap, int cmd);
 static int osc_io_unplug_async(const struct lu_env *env,
 			       struct client_obd *cli, struct osc_object *osc);
-static void osc_free_grant(struct client_obd *cli, unsigned int nr_pages,
-			   unsigned int lost_grant, unsigned int dirty_grant);
+static void osc_free_grant(struct client_obd *cli, struct client_memcg *cmemcg,
+			   unsigned int nr_pages, unsigned int lost_grant,
+			   unsigned int dirty_grant);
 
 static void osc_extent_tree_dump0(int mask, struct osc_object *obj,
 				  const char *func, int line);
@@ -845,6 +846,7 @@ int osc_extent_finish(const struct lu_env *env, struct osc_extent *ext,
 	struct osc_object *osc = ext->oe_obj;
 	struct osc_async_page *oap;
 	struct osc_async_page *tmp;
+	struct client_memcg *cmemcg;
 	int nr_pages = ext->oe_nr_pages;
 	int lost_grant = 0;
 	int blocksize = cli->cl_import->imp_obd->obd_osfs.os_bsize ? : 4096;
@@ -871,6 +873,9 @@ int osc_extent_finish(const struct lu_env *env, struct osc_extent *ext,
 				     oap_pending_item) {
 		list_del_init(&oap->oap_rpc_item);
 		list_del_init(&oap->oap_pending_item);
+		if (nr_pages == ext->oe_nr_pages)
+			cmemcg = cmemcg_find(cli, page_folio(
+						  oap->oap_brw_page.bp_page));
 		if (last_off <= oap->oap_obj_off) {
 			last_off = oap->oap_obj_off;
 			last_count = oap->oap_count;
@@ -899,8 +904,12 @@ int osc_extent_finish(const struct lu_env *env, struct osc_extent *ext,
 
 		lost_grant = PAGE_SIZE - count;
 	}
-	if (ext->oe_grants > 0)
-		osc_free_grant(cli, nr_pages, lost_grant, ext->oe_grants);
+	if (ext->oe_grants > 0) {
+		osc_free_grant(cli, cmemcg, nr_pages, lost_grant,
+			       ext->oe_grants);
+		if (cmemcg && cmemcg->m_dirty_pages == 0)
+			cmemcg_remove(cli, cmemcg);
+	}
 
 	osc_extent_remove(ext);
 	/* put the refcount for RPC */
@@ -967,6 +976,7 @@ static int osc_extent_truncate(struct osc_extent *ext, pgoff_t trunc_index,
 	struct client_obd     *cli = osc_cli(obj);
 	struct osc_async_page *oap;
 	struct osc_async_page *tmp;
+	struct client_memcg *cmemcg = NULL;
 	struct folio_batch    *fbatch;
 	int                    pages_in_chunk = 0;
 	int                    ppc_bits    = cli->cl_chunkbits -
@@ -1028,7 +1038,8 @@ static int osc_extent_truncate(struct osc_extent *ext, pgoff_t trunc_index,
 			LASSERT(page->cp_state == CPS_FREEING);
 			LASSERT(0);
 		}
-
+		if (nr_pages == 0)
+			cmemcg = cmemcg_find(cli, page_folio(page->cp_vmpage));
 		cl_batch_put(env, page, fbatch);
 
 		--ext->oe_nr_pages;
@@ -1071,8 +1082,11 @@ static int osc_extent_truncate(struct osc_extent *ext, pgoff_t trunc_index,
 	}
 	osc_object_unlock(obj);
 
-	if (grants > 0 || nr_pages > 0)
-		osc_free_grant(cli, nr_pages, grants, grants);
+	if (grants > 0 || nr_pages > 0) {
+		osc_free_grant(cli, cmemcg, nr_pages, grants, grants);
+		if (cmemcg && cmemcg->m_dirty_pages == 0)
+			cmemcg_remove(cli, cmemcg);
+	}
 
 out:
 	cl_io_fini(env, io);
@@ -1391,10 +1405,13 @@ static void osc_completion(const struct lu_env *env, struct osc_object *osc,
 
 /* caller must hold loi_list_lock */
 static void osc_consume_write_grant(struct client_obd *cli,
+				    struct client_memcg *cmemcg,
 				    struct brw_page *pga)
 {
 	LASSERT(!(pga->bp_flag & OBD_BRW_FROM_GRANT));
 	cli->cl_dirty_pages++;
+	if (cmemcg)
+		cmemcg->m_dirty_pages++;
 	pga->bp_flag |= OBD_BRW_FROM_GRANT;
 	CDEBUG(D_CACHE, "using %lu grant credits for brw %p page %p\n",
 	       PAGE_SIZE, pga, pga->bp_page);
@@ -1403,6 +1420,7 @@ static void osc_consume_write_grant(struct client_obd *cli,
 /* the companion to osc_consume_write_grant, called when a brw has completed.
  * must be called with the loi lock held. */
 static void osc_release_write_grant(struct client_obd *cli,
+				    struct client_memcg *cmemcg,
 				    struct brw_page *pga)
 {
 	ENTRY;
@@ -1415,6 +1433,8 @@ static void osc_release_write_grant(struct client_obd *cli,
 	pga->bp_flag &= ~OBD_BRW_FROM_GRANT;
 	atomic_long_dec(&obd_dirty_pages);
 	cli->cl_dirty_pages--;
+	if (cmemcg)
+		cmemcg->m_dirty_pages--;
 	EXIT;
 }
 
@@ -1484,8 +1504,9 @@ static void osc_unreserve_grant(struct client_obd *cli,
  *    size on the client side. so clients have to calculate lost grant by the
  *    blocksize on the OST. See tgt_grant_check() for details.
  */
-static void osc_free_grant(struct client_obd *cli, unsigned int nr_pages,
-			   unsigned int lost_grant, unsigned int dirty_grant)
+static void osc_free_grant(struct client_obd *cli, struct client_memcg *cmemcg,
+			   unsigned int nr_pages, unsigned int lost_grant,
+			   unsigned int dirty_grant)
 {
 	unsigned long grant;
 
@@ -1494,6 +1515,8 @@ static void osc_free_grant(struct client_obd *cli, unsigned int nr_pages,
 	spin_lock(&cli->cl_loi_list_lock);
 	atomic_long_sub(nr_pages, &obd_dirty_pages);
 	cli->cl_dirty_pages -= nr_pages;
+	if (cmemcg)
+		cmemcg->m_dirty_pages -= nr_pages;
 	cli->cl_lost_grant += lost_grant;
 	cli->cl_dirty_grant -= dirty_grant;
 	if (cli->cl_avail_grant < grant && cli->cl_lost_grant >= grant) {
@@ -1514,10 +1537,11 @@ static void osc_free_grant(struct client_obd *cli, unsigned int nr_pages,
  * The companion to osc_enter_cache(), called when @oap is no longer part of
  * the dirty accounting due to error.
  */
-static void osc_exit_cache(struct client_obd *cli, struct osc_async_page *oap)
+static void osc_exit_cache(struct client_obd *cli, struct client_memcg *cmemcg,
+			   struct osc_async_page *oap)
 {
 	spin_lock(&cli->cl_loi_list_lock);
-	osc_release_write_grant(cli, &oap->oap_brw_page);
+	osc_release_write_grant(cli, cmemcg, &oap->oap_brw_page);
 	spin_unlock(&cli->cl_loi_list_lock);
 }
 
@@ -1526,9 +1550,11 @@ static void osc_exit_cache(struct client_obd *cli, struct osc_async_page *oap)
  * is available.
  */
 static int osc_enter_cache_try(struct client_obd *cli,
+			       struct client_memcg *cmemcg,
 			       struct osc_async_page *oap,
 			       int bytes)
 {
+	bool pages_avail = true;
 	int rc;
 
 	OSC_DUMP_GRANT(D_CACHE, cli, "need:%d", bytes);
@@ -1537,10 +1563,15 @@ static int osc_enter_cache_try(struct client_obd *cli,
 	if (rc < 0)
 		return 0;
 
-	if (cli->cl_dirty_pages < cli->cl_dirty_max_pages) {
+	if (cli->cl_dirty_pages >= cli->cl_dirty_max_pages)
+		pages_avail = false;
+	else if (cmemcg && cmemcg->m_dirty_pages >= cmemcg->m_dirty_max_pages)
+		pages_avail = false;
+
+	if (pages_avail) {
 		if (atomic_long_add_return(1, &obd_dirty_pages) <=
 		    obd_max_dirty_pages) {
-			osc_consume_write_grant(cli, &oap->oap_brw_page);
+			osc_consume_write_grant(cli, cmemcg, &oap->oap_brw_page);
 			rc = 1;
 			goto out;
 		} else
@@ -1572,6 +1603,7 @@ static inline void cli_lock_after_unplug(struct client_obd *cli)
 {
 	spin_lock(&cli->cl_loi_list_lock);
 }
+
 /**
  * The main entry to reserve dirty page accounting. Usually the grant reserved
  * in this function will be freed in bulk in osc_free_grant() unless it fails
@@ -1580,6 +1612,7 @@ static inline void cli_lock_after_unplug(struct client_obd *cli)
  * The process will be put into sleep if it's already run out of grant.
  */
 static int osc_enter_cache(const struct lu_env *env, struct client_obd *cli,
+			   struct client_memcg *cmemcg,
 			   struct osc_object *osc, struct osc_async_page *oap,
 			   int bytes)
 {
@@ -1627,7 +1660,7 @@ static int osc_enter_cache(const struct lu_env *env, struct client_obd *cli,
 	 */
 	remain = wait_event_idle_exclusive_timeout_cmd(
 		cli->cl_cache_waiters,
-		(entered = osc_enter_cache_try(cli, oap, bytes)) ||
+		(entered = osc_enter_cache_try(cli, cmemcg, oap, bytes)) ||
 		(cli->cl_dirty_pages == 0 && cli->cl_w_in_flight == 0),
 		timeout,
 		cli_unlock_and_unplug(env, cli, oap),
@@ -2287,6 +2320,7 @@ int osc_queue_async_io(const struct lu_env *env, struct cl_io *io,
 	struct osc_async_page *oap = &ops->ops_oap;
 	struct client_obd     *cli = osc_cli(osc);
 	struct folio_batch    *fbatch = &osc_env_info(env)->oti_fbatch;
+	struct client_memcg *cmemcg;
 	pgoff_t index;
 	unsigned int tmp;
 	unsigned int grants = 0;
@@ -2353,6 +2387,9 @@ int osc_queue_async_io(const struct lu_env *env, struct cl_io *io,
 	OSC_IO_DEBUG(osc, "oap %p page %p added for cmd %d\n",
 		     oap, oap->oap_page, oap->oap_cmd & OBD_BRW_RWMASK);
 
+	cmemcg = cmemcg_find(cli, page_folio(
+				  oap->oap_brw_page.bp_page));
+
 	index = osc_index(oap2osc(oap));
 
 	/* Add this page into extent by the following steps:
@@ -2374,7 +2411,7 @@ int osc_queue_async_io(const struct lu_env *env, struct cl_io *io,
 
 		/* it doesn't need any grant to dirty this page */
 		spin_lock(&cli->cl_loi_list_lock);
-		rc = osc_enter_cache_try(cli, oap, grants);
+		rc = osc_enter_cache_try(cli, cmemcg, oap, grants);
 		if (rc == 0) { /* try failed */
 			grants = 0;
 			need_release = 1;
@@ -2425,7 +2462,7 @@ int osc_queue_async_io(const struct lu_env *env, struct cl_io *io,
 		}
 
 		if (grants == 0) {
-			rc = osc_enter_cache(env, cli, osc, oap, tmp);
+			rc = osc_enter_cache(env, cli, cmemcg, osc, oap, tmp);
 			if (rc == 0)
 				grants = tmp;
 		}
@@ -2436,7 +2473,7 @@ restart_find:
 			ext = osc_extent_find(env, osc, index, &tmp);
 			if (IS_ERR(ext)) {
 				LASSERT(tmp == grants);
-				osc_exit_cache(cli, oap);
+				osc_exit_cache(cli, cmemcg, oap);
 				rc = PTR_ERR(ext);
 				ext = NULL;
 			} else {
@@ -2616,6 +2653,7 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 	struct osc_lock *oscl;
 	struct cl_page *page;
 	struct osc_page *opg;
+	struct client_memcg *cmemcg;
 	int mppr = cli->cl_max_pages_per_rpc;
 	pgoff_t start = CL_PAGE_EOF;
 	bool can_merge = true;
@@ -2639,6 +2677,9 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 		oap = &opg->ops_oap;
 		index = osc_index(opg);
 
+		if (page_count == 0)
+			cmemcg = cmemcg_find(cli, page_folio(
+						  oap->oap_brw_page.bp_page));
 		if (index > end)
 			end = index;
 		if (index < start)
@@ -2704,7 +2745,7 @@ int osc_queue_dio_pages(const struct lu_env *env, struct cl_io *io,
 				opg = osc_cl_page_osc(page, obj);
 				oap = &opg->ops_oap;
 
-				osc_consume_write_grant(cli,
+				osc_consume_write_grant(cli, cmemcg,
 							&oap->oap_brw_page);
 			}
 			atomic_long_add(page_count, &obd_dirty_pages);
@@ -2751,14 +2792,15 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 			 int brw_flags)
 {
 	struct osc_io *oio = osc_env_io(env);
-	struct client_obd     *cli = osc_cli(obj);
-	struct osc_extent     *ext;
+	struct client_obd *cli = osc_cli(obj);
+	struct osc_extent *ext;
 	struct osc_async_page *oap;
-	int     page_count = 0;
-	int     mppr       = cli->cl_max_pages_per_rpc;
-	bool	can_merge   = true;
-	pgoff_t start      = CL_PAGE_EOF;
-	pgoff_t end        = 0;
+	struct client_memcg *cmemcg;
+	int page_count = 0;
+	int mppr= cli->cl_max_pages_per_rpc;
+	bool can_merge = true;
+	pgoff_t start = CL_PAGE_EOF;
+	pgoff_t end = 0;
 	enum cl_req_type crt;
 	ENTRY;
 
@@ -2771,6 +2813,9 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 		struct osc_page *opg = oap2osc_page(oap);
 		pgoff_t index = osc_index(opg);
 
+		if (page_count == 0)
+			cmemcg = cmemcg_find(cli, page_folio(
+						  oap->oap_brw_page.bp_page));
 		if (index > end)
 			end = index;
 		if (index < start)
@@ -2830,7 +2875,7 @@ int osc_queue_sync_pages(const struct lu_env *env, struct cl_io *io,
 		    cli->cl_dirty_pages + page_count <
 						    cli->cl_dirty_max_pages) {
 			list_for_each_entry(oap, list, oap_pending_item) {
-				osc_consume_write_grant(cli,
+				osc_consume_write_grant(cli, cmemcg,
 							&oap->oap_brw_page);
 			}
 			atomic_long_add(page_count, &obd_dirty_pages);
